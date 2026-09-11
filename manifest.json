@@ -1,0 +1,12 @@
+{
+	"id": "snn-design-to-html-css",
+	"name": "SNN Design to HTML/CSS",
+	"api": "1.0.0",
+	"main": "src/main/main.ts",
+	"ui": "src/ui/ui.ts",
+	"editorType": ["figma"],
+	"documentAccess": "dynamic-page",
+	"networkAccess": {
+		"allowedDomains": ["none"]
+	}
+}

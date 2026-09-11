@@ -1,0 +1,283 @@
+:root {
+	font-family: Inter, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+	font-size: 12px;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+	height: 100%;
+	margin: 0;
+	background: var(--figma-color-bg, #fff);
+	color: var(--figma-color-text, #1e1e1e);
+}
+
+button,
+select,
+input {
+	font: inherit;
+	color: inherit;
+}
+
+.shell {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	position: relative;
+}
+
+.bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--figma-color-border, #e6e6e6);
+}
+
+.bar.sub {
+	padding-top: 6px;
+	padding-bottom: 6px;
+}
+
+.selection {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	color: var(--figma-color-text-secondary, #666);
+}
+
+.selection.stale::after {
+	content: ' · selection changed';
+	color: var(--figma-color-text-warning, #b86200);
+}
+
+.btn {
+	height: 28px;
+	padding: 0 12px;
+	border-radius: 6px;
+	border: 1px solid var(--figma-color-border, #e6e6e6);
+	background: var(--figma-color-bg, #fff);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+	background: var(--figma-color-bg-hover, #f5f5f5);
+}
+
+.btn.primary {
+	border-color: transparent;
+	background: var(--figma-color-bg-brand, #0d99ff);
+	color: var(--figma-color-text-onbrand, #fff);
+	font-weight: 500;
+}
+
+.btn.primary:hover:not(:disabled) {
+	background: var(--figma-color-bg-brand-hover, #007be5);
+}
+
+.btn:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+
+.icon-btn {
+	display: grid;
+	place-items: center;
+	width: 28px;
+	height: 28px;
+	border: none;
+	border-radius: 6px;
+	background: none;
+	cursor: pointer;
+	color: var(--figma-color-icon, #333);
+}
+
+.icon-btn:hover,
+.icon-btn[aria-expanded='true'] {
+	background: var(--figma-color-bg-hover, #f5f5f5);
+}
+
+.tabs {
+	display: flex;
+	gap: 2px;
+}
+
+.tab {
+	height: 28px;
+	padding: 0 10px;
+	border: none;
+	border-radius: 6px;
+	background: none;
+	cursor: pointer;
+	color: var(--figma-color-text-secondary, #666);
+}
+
+.tab:hover {
+	color: var(--figma-color-text, #1e1e1e);
+}
+
+.tab.active {
+	background: var(--figma-color-bg-secondary, #f0f0f0);
+	color: var(--figma-color-text, #1e1e1e);
+	font-weight: 500;
+}
+
+.actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.settings {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 18px;
+	padding: 10px 12px;
+	border-bottom: 1px solid var(--figma-color-border, #e6e6e6);
+	background: var(--figma-color-bg-secondary, #f7f7f7);
+}
+
+.settings label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.settings select {
+	height: 26px;
+	border-radius: 5px;
+	border: 1px solid var(--figma-color-border, #e6e6e6);
+	background: var(--figma-color-bg, #fff);
+}
+
+.banner {
+	padding: 8px 12px;
+	background: var(--figma-color-bg-warning-tertiary, #fff4e5);
+	color: var(--figma-color-text, #1e1e1e);
+	border-bottom: 1px solid var(--figma-color-border-warning, #ffc670);
+	line-height: 1.4;
+}
+
+.editor-wrap {
+	position: relative;
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+.editor {
+	position: absolute;
+	inset: 0;
+}
+
+.empty {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 4px;
+	padding: 24px;
+	text-align: center;
+	line-height: 1.5;
+	color: var(--figma-color-text-secondary, #666);
+	background: var(--figma-color-bg, #fff);
+}
+
+.empty p {
+	margin: 0;
+}
+
+.notes {
+	border-top: 1px solid var(--figma-color-border, #e6e6e6);
+	max-height: 40%;
+	display: flex;
+	flex-direction: column;
+}
+
+.notes-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	width: 100%;
+	padding: 8px 12px;
+	border: none;
+	background: none;
+	cursor: pointer;
+	font-weight: 500;
+	text-align: left;
+}
+
+.notes-head:hover {
+	background: var(--figma-color-bg-hover, #f5f5f5);
+}
+
+.notes.open .chev {
+	transform: rotate(180deg);
+}
+
+.notes-body {
+	overflow: auto;
+	padding: 0 12px 10px;
+}
+
+.note-group + .note-group {
+	margin-top: 10px;
+}
+
+.note-title {
+	margin-bottom: 4px;
+	color: var(--figma-color-text-secondary, #666);
+}
+
+.note-item {
+	display: block;
+	width: 100%;
+	padding: 3px 8px;
+	border: none;
+	border-radius: 4px;
+	background: none;
+	text-align: left;
+	cursor: pointer;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.note-item:hover {
+	background: var(--figma-color-bg-hover, #f5f5f5);
+	color: var(--figma-color-text-brand, #0d99ff);
+}
+
+.note-more {
+	padding: 3px 8px;
+	color: var(--figma-color-text-tertiary, #999);
+}
+
+.status {
+	padding: 6px 28px 6px 12px;
+	border-top: 1px solid var(--figma-color-border, #e6e6e6);
+	color: var(--figma-color-text-secondary, #666);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.resize {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	width: 16px;
+	height: 16px;
+	cursor: nwse-resize;
+	background: linear-gradient(135deg, transparent 50%, var(--figma-color-border-strong, #bbb) 50%, transparent 58%, transparent 66%, var(--figma-color-border-strong, #bbb) 66%, transparent 74%);
+}
