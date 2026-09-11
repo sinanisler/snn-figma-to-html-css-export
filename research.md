@@ -1,6 +1,24 @@
 # Research: Building a "Design to HTML/CSS" Figma Plugin
 
-Compiled 2026-09-11. Purpose: give you the landscape, the technical constraints, and the community-sourced pain points needed to make deliberate product decisions before writing any code for `snn-design-to-html-css`.
+Compiled 2026-09-11, revised same day after product decisions. Purpose: give you the landscape, the technical constraints, and the community-sourced pain points needed to make deliberate product decisions before writing any code for `snn-design-to-html-css`.
+
+---
+
+## 0. Your Decisions (locked in for v1)
+
+Recorded here so the rest of the document, and the eventual spec, builds on a fixed target instead of re-litigating options.
+
+| Area | Decision | Notes |
+|---|---|---|
+| Output format | **Native HTML/CSS only** for v1. Tailwind considered as a possible **later, optional** output mode (toggle/tab), not a v1 requirement. | See §5 for how other tools structure this so adding Tailwind later doesn't require a rewrite. |
+| AI | **No AI, anywhere, ever in this plugin.** Fast, deterministic, local export only. Imperfect output is expected and acceptable — it's a *starting point*, refinement happens in a separate downstream tool/step, not this plugin's job. | Matches the FigmaToCode philosophy (§2.2) almost exactly. |
+| Non-Auto-Layout ("absolute") frames | **Attempt a smarter geometry-based inference first; fall back to 100% absolute positioning (matching Figma's own default model) when inference isn't confident.** Full research on what "smarter" can realistically mean is in §3.3.1 — this is genuinely unsolved territory in the OSS tools reviewed, so treat it as your own R&D, not something to copy from a repo. | This is the single hardest and most differentiating engineering problem in the whole plugin. Budget real time for it. |
+| Responsive/breakpoints | **Explicitly out of scope.** Ignore entirely for v1. | Removes an entire category of complexity (§4.3) other tools struggle with. |
+| Output UX | **In-plugin code viewer/editor** for readability (recommend **CodeMirror 6**, not Monaco — see §6.1 for why), **Copy to Clipboard**, and explicit **Generate / Regenerate** buttons (no silent auto-regeneration on every canvas edit). | |
+| Variables/Tokens | **Yes — exported as CSS custom properties on top of the generated CSS**, wherever a fill/effect/spacing value is bound to a Figma Variable. | See §3.4, unchanged from first pass, now confirmed as in-scope for v1, not a maybe. |
+| Entry point | **Classic plugin UI panel only** (not the Dev Mode-only `figma.codegen` integration). | Important nuance: this does **not** guarantee every Figma user can run it — see §6.2, Figma itself restricts *all* plugins (regardless of price) to users with edit access on a file. |
+| Access / pricing | **100% free**, no paid tier, intended for everyone. | Combined with the entry-point choice, see §6.2 for the real-world limits on "everyone" that come from Figma's platform, not from your pricing. |
+| Semantics | **Clean, semantic HTML/CSS output** as a first-class goal (real tags, sensible class names), not div-soup. | Reinforces the whitespace analysis in §5 (old §5, renumbered below). |
 
 ---
 
@@ -88,7 +106,25 @@ Figma's Auto Layout is deliberately Flexbox-shaped. Key property mappings:
 - `primaryAxisSizingMode` / `counterAxisSizingMode` ("FIXED" vs "AUTO"/hug) → whether to emit fixed `width/height` vs `width: fit-content`/flex-grow behavior
 - Per-child `layoutGrow`, `layoutAlign`, `layoutSizingHorizontal/Vertical` ("FIXED"/"HUG"/"FILL") → `flex-grow`, `align-self`, and fixed vs `100%`/`auto` sizing on the child
 
-**Community-sourced gotcha:** frames **not** using Auto Layout (free-form/absolute positioning) are exactly where generic plugins fall apart — a forum thread ("after converting Figma into code with plugin some of the elements' position went wrong") got no real fix beyond "ask the plugin author," and multiple tools' own docs (fig-gen) explicitly tell designers to avoid fixed positioning and use Auto Layout for decent output. **Decision point:** decide explicitly how you handle non-Auto-Layout frames — e.g., fall back to `position: absolute` inside a `position: relative` parent (this is honest, at least reproduces the visual, but produces exactly the "brittle/non-responsive" code people complain about) vs. refusing/flagging ungrouped absolute layers as "needs Auto Layout" the way FigmaToCode surfaces warnings instead of guessing.
+**Community-sourced gotcha:** frames **not** using Auto Layout (free-form/absolute positioning) are exactly where generic plugins fall apart — a forum thread ("after converting Figma into code with plugin some of the elements' position went wrong") got no real fix beyond "ask the plugin author," and multiple tools' own docs (fig-gen) explicitly tell designers to avoid fixed positioning and use Auto Layout for decent output.
+
+#### 3.3.1 Deep dive: is a "smarter" absolute→flex inference actually possible? (your explicit ask)
+
+You asked specifically whether it's possible to do better than pure absolute positioning for frames that don't use Auto Layout. Here's what the research actually found, in order of how directly it answers the question:
+
+**Nobody in the OSS space does this today.** I pulled the actual source of `bernaferrari/FigmaToCode` — the most mature, most-studied open-source converter in this whole space — specifically its `packages/backend/src/common/commonPosition.ts`, the file responsible for the absolute-vs-relative decision. Its logic is entirely **local and declarative, not geometric**: `commonIsAbsolutePosition()` just checks whether Figma has already flagged the node as `layoutPositioning === "ABSOLUTE"` or whether the **parent's own** `layoutMode` is `"NONE"`/unset. There is **no clustering, no sibling-relationship analysis, no row/column detection** anywhere in that file or its neighbors (`commonPadding.ts`, `nodeWidthHeight.ts`, etc. only handle padding/sizing math, not grouping). In other words: even the best deterministic OSS converter available today makes the flex-vs-absolute call **per-node, using only flags Figma already set**, and falls straight to absolute positioning the instant Auto Layout isn't already present. This is a genuine, confirmed gap — not something you're missing by not reading enough repos.
+
+**Figma itself has this capability, but doesn't expose it.** The "Suggest Auto Layout" feature (Shift+A on a selection of plain, non-Auto-Layout objects) runs a "best guess" internal algorithm that infers direction, spacing, and alignment from raw geometry — users on the Figma forum confirm this exists and works reasonably well in the UI. However, a Figma forum thread explicitly requesting **plugin API access to this exact feature** ("access to the suggest auto layout feature in the plugin API") confirms it is **not exposed via the Plugin API today**, and there's no published algorithm description — it's proprietary and UI-only. You cannot call it programmatically; you can only read `layoutMode`/`layoutPositioning` after a human has manually applied it.
+
+**So "smarter than absolute" means building your own geometry heuristic from scratch.** This is a real, well-studied class of problem outside Figma's world — it's structurally the same problem as **inferring visual layout structure from raw coordinates**, which the classic **VIPS algorithm** ("VIsion-based Page Segmentation", Microsoft Research, Cai & Yu) solved for web pages by recursively segmenting a page into blocks using visual **separators** (horizontal/vertical gaps with no content crossing them) rather than relying on the underlying markup structure. Applied to your problem, a first practical version could work like this:
+
+1. **Row/column clustering by bounding-box overlap.** For a given non-Auto-Layout frame's direct children, sort by `y` (then `x`). Group children into a "row" when their vertical (`y`, `y+height`) ranges overlap by some threshold; group into a "column" similarly on `x`. This gives you candidate `HORIZONTAL`/`VERTICAL` groupings without any Figma flag telling you so.
+2. **Gap-consistency check.** Within a detected row/column, measure the gaps between consecutive siblings. If the gaps are consistent within a small tolerance (e.g. ±1–2px), that's a strong flexbox `gap` signal — emit `display:flex` + `gap`. If gaps vary wildly or elements overlap, that's a strong signal this group is **not** a clean flex candidate.
+3. **Alignment check.** Compare each child's leading/trailing edge on the cross-axis (e.g. left edges for a vertical stack) — consistent alignment across children is another positive signal for `align-items: flex-start/center/flex-end`; inconsistent alignment is a negative signal.
+4. **Recursive segmentation.** Apply this recursively the way VIPS does — a frame might cleanly split into two or three big row-groups, each of which internally still needs its own row/column analysis, some of which might succeed and some of which might not.
+5. **Confidence threshold + graceful fallback.** Only emit `display:flex` when the above checks pass with high confidence (e.g. no overlaps, low gap variance, consistent alignment). The moment confidence is low for a given group — overlapping layers, freeform illustration-style composition, inconsistent spacing — **fall back to `position:absolute` children inside a `position:relative` wrapper at that group's level only** (not the whole frame), which is exactly Figma's own native rendering model, so it's never *wrong*, just less semantic. This gives you a strictly-better-or-equal result compared to "always absolute," while never claiming false precision.
+
+This is genuinely unsolved/undocumented territory among the tools this research could find — which is good news framed correctly: it's real intellectual property you can build, not a missing 10-minute Stack Overflow answer. It's also realistically a **post-v1 feature**, not something to block your first release on, given you've already said imperfect output is fine for now. A reasonable staged plan: **ship v1 with the honest, always-absolute fallback for non-Auto-Layout frames** (fast, correct-if-boring, matches your "fast export, refine elsewhere" philosophy), then invest in the geometry-clustering heuristic above as a v1.1/v2 differentiator once the rest of the pipeline is solid.
 
 ### 3.4 Variables/Design Tokens → CSS custom properties
 
@@ -132,7 +168,16 @@ Beyond a classic plugin UI, Figma has a **Dev Mode-only codegen API**: manifest 
 
 - Figma Community supports paid plugins natively: one-time or subscription, **$2 minimum price**, subscriptions get a default 7-day free trial (configurable), **Figma takes a 15% fee**, payouts ~30 days after purchase.
 - Common pattern in this space specifically: **freemium** — free plugin for visibility/adoption, paid tier gates advanced output (e.g., more frameworks, batch export, higher-res assets, tokens/variables export) — this mirrors Anima/Locofy's own tiering and is called out as the generally-recommended model over one-time-purchase for this category.
-- Some plugin authors use external payment processors instead of/alongside Figma's native billing for more control over customer data and tax handling — a build-vs-buy decision, not urgent for an MVP.
+- Some plugin authors use external payment processors instead of/alongside Figma's native billing for more control over customer data and tax handling — a build-vs-buy decision, not urgent for an MVP. **Not relevant to you** since v1 is 100% free, but noted for completeness in case that ever changes.
+
+### 3.12 Code viewer/editor component (Monaco vs CodeMirror) — resolving your "maybe Monaco" question
+
+You floated Monaco Editor for the in-plugin code viewer. Researched this specifically:
+
+- **Bundle size**: Monaco is roughly **5–10MB** (uncompressed; ~5MB gzipped), and its docs and multiple integration write-ups (Sourcegraph's own "why we migrated off Monaco" post) note it needs **Web Workers** for language services and a non-trivial bundler configuration to work outside a full webpack/VS Code-style setup. **CodeMirror 6** is modular — a basic HTML/CSS-highlighting setup lands around **~50–300KB**, no web workers required, and it's designed to be tree-shaken to just the languages/features you need.
+- **Fit with your "no network access" / fully-local philosophy**: Monaco is commonly loaded from a CDN in many integration examples (simplest path), which would either (a) contradict a `networkAccess: "none"` manifest, or (b) require you to vendor and bundle the entire ~5-10MB Monaco distribution locally into your plugin package, inflating install size and Figma review payload for no real benefit here (you don't need Monaco's IntelliSense/autocomplete/multi-file project features — you're rendering **read-only, syntax-highlighted output**, not building an IDE).
+- **Precedent found**: a Community plugin, `ilyalesik/figma-code-playground`, does bundle Monaco inside a Figma plugin — proving it's *possible* — but its own repo doesn't document the bundling approach or performance cost, and that plugin's use case (writing/running arbitrary code snippets) genuinely needs an editor with real input/autocomplete, unlike yours (read-only output display).
+- **Recommendation**: use **CodeMirror 6** with just the `@codemirror/lang-html` and `@codemirror/lang-css` language packages, in **read-only mode** (`EditorView.editable.of(false)` / `EditorState.readOnly`), with a syntax-highlighting theme. This gets you the "easy to read, monospace, color-coded, scrollable" experience you actually want, keeps the plugin small and fast to load inside Figma's iframe, and stays consistent with your no-network, no-bloat philosophy. Pair it with a simple "Copy to Clipboard" button (`navigator.clipboard.writeText`, available in the UI iframe) and explicit **Generate**/**Regenerate** buttons that re-run the pipeline on demand rather than on every canvas change (avoids perf hits on large selections, matches the "fast, on-demand export" goal).
 
 ---
 
@@ -155,32 +200,40 @@ Ranked roughly by how often/strongly each came up across sources:
 
 ---
 
-## 5. Where the Whitespace Is
+## 5. Where the Whitespace Is (and how your decisions map to it)
 
-Based on the above, a differentiated position for `snn-design-to-html-css` could combine:
+Based on the competitive research, a differentiated position for `snn-design-to-html-css` combines:
 
-1. **Deterministic, local-only, no-AI core** (like FigmaToCode) — reproducible output, `networkAccess: "none"`, no per-generation cost, no vendor API dependency, and it's a genuine trust/privacy pitch against the AI-pipeline tools.
-2. **HTML/CSS-only focus, done well**, rather than trying to also cover React/Vue/Flutter/SwiftUI like FigmaToCode does — depth over breadth is itself a differentiator; you can afford better semantic-tag inference, cleaner class naming, and real accessibility defaults if you're not also maintaining five other backends.
-3. **Explicit, visible warnings instead of silent guessing** when a layer isn't Auto Layout, has mixed fonts, or can't be cleanly translated — copy FigmaToCode's "Explain" stage rather than pretending everything converts perfectly (avoids Codia-style credibility complaints).
-4. **Round-trip-aware output habits** even if you don't solve full sync: stable, human-readable class names derived from Figma layer names (not `div_1_2_3`), consistent structure ordering, and a "re-export merges predictably" mental model — mitigates (without fully solving) complaint #1.
-5. **Basic accessibility and semantics as a first-class setting**, not an afterthought — layer-name/type-based tag inference (button/nav/header/footer/img+alt), since literally nobody in the market does this well by default.
-6. **Config surface for the things developers actually asked for**: unit rounding/snapping, class-naming convention (BEM vs simple), inline-style vs external stylesheet, SVG-for-vectors vs PNG-for-photos, variables→CSS-custom-properties toggle.
-7. **Decide your breakpoint story explicitly** rather than ignoring it: even a simple "detect N frames named `Mobile`/`Tablet`/`Desktop` in the same section and emit `@media` queries" would beat most free tools and doesn't require Anima's full manual-linking UI.
+1. **Deterministic, local-only, no-AI core** (like FigmaToCode) — reproducible output, `networkAccess: "none"`, no per-generation cost, no vendor API dependency. ✅ **Matches your decision** in §0 — this is now your architecture, not just an option.
+2. **HTML/CSS-only focus, done well**, rather than trying to also cover React/Vue/Flutter/SwiftUI like FigmaToCode does. ✅ **Matches your decision.** Depth over breadth is itself a differentiator — you can afford better semantic-tag inference and cleaner output if you're not maintaining five other backends.
+3. **Explicit, visible warnings instead of silent guessing** when a layer isn't Auto Layout, has mixed fonts, or can't be cleanly translated — copy FigmaToCode's "Explain" stage rather than pretending everything converts perfectly. **Recommended addition**, not yet an explicit decision of yours — cheap to add (a small "conversion notes" panel next to the code viewer) and directly defuses the Codia-style "claims perfection, doesn't deliver" credibility complaint.
+4. **Basic accessibility and semantics as a first-class setting** — layer-name/type-based tag inference (button/nav/header/footer/img+alt). ✅ **Matches your decision** ("clean semantic HTML/CSS output"). Nobody in the market does this well by default — real whitespace.
+5. **Config surface for the things developers actually asked for**: unit rounding/snapping, class-naming convention (BEM vs simple), SVG-for-vectors vs PNG-for-photos, variables→CSS-custom-properties toggle. Still open — see §6.1 below.
+6. **Should Tailwind ever become an option, architect for it now, ship it later.** See §5.1.
+
+### 5.1 How other tools structure "plain CSS now, Tailwind maybe later" — direct precedent
+
+You said you're not 100% sure whether to offer Tailwind as an optional additional output. Good news: this exact fork in the road has direct precedent, and it maps cleanly onto the pipeline architecture already recommended in §2.2:
+
+- **FigmaToCode** treats "HTML" and "Tailwind" as **separate generator backends fed by the same normalized tree** — its 5-stage pipeline (Read → Normalize → Optimize → **Generate** → Explain) only branches at the Generate step. Plain-CSS-HTML and Tailwind-HTML are two different "Generate" modules consuming identical upstream data (same layout resolution, same alignment/sizing decisions). Users pick the output format from a tab/dropdown in the UI; nothing about the read/normalize/optimize stages changes.
+- **ayush013/fig-gen**, by contrast, is Tailwind-only from the ground up (utility classes baked into its core generation logic), which is exactly why retrofitting plain CSS into a Tailwind-first tool (or vice versa) is awkward — the styling model is threaded through the whole codebase, not isolated to one stage.
+- **Practical recommendation for you**: build your v1 pipeline with the same separation FigmaToCode uses — a framework-agnostic **normalized layout/style tree** as the output of "read + optimize," and a **single, swappable "generate CSS classes + HTML tags" module** as the last stage. Ship only the plain-CSS generator for v1 (per your decision), but keep that module boundary clean. If you decide later to add Tailwind, it becomes a **second Generate module** reading the same tree — not a rewrite. This costs you nothing now and preserves the option cleanly, which resolves your "maybe both" uncertainty without forcing a decision today.
 
 ---
 
-## 6. Open Decisions for You to Make (before coding starts)
+## 6. Remaining Decisions / Things to Watch
 
-- **Scope**: HTML/CSS only (per your stated goal) — confirm you're deliberately *not* chasing React/Vue/Tailwind output like FigmaToCode does, to keep quality high and scope sane for v1.
-- **AI or not**: fully deterministic rule-based (simpler, local, trustworthy, but semantic inference will be shallow) vs. optional AI-assisted mode for things like tag/alt-text inference (adds network access disclosure + cost + inconsistency risk).
-- **Non-Auto-Layout fallback**: absolute-position fallback vs. hard warning/refusal.
-- **Output delivery**: copy-to-clipboard single file, downloadable zip with separate CSS/assets, or both.
-- **Responsive story**: none in v1, or basic multi-frame/media-query detection.
-- **Variables/tokens**: ignore in v1, or export bound variables as CSS custom properties.
-- **Entry point**: classic plugin UI panel, Dev Mode codegen integration (`figma.codegen`), or both.
-- **Tooling**: `create-figma-plugin` (batteries-included, Preact) vs `Plugma` (Vite, framework-agnostic, faster DX loop).
-- **Monetization**: free-only for adoption/portfolio purposes, or freemium from day one (gate e.g. zipped multi-file export, variables export, or batch/multi-frame export behind a paid tier).
-- **Positioning statement**: pick one lane and say it out loud — e.g. "the deterministic, local-only, semantic HTML/CSS exporter for designers who don't want AI guesswork or React baggage."
+Most of the big product questions from the first research pass are now locked in (§0). What's left:
+
+### 6.1 Still genuinely open
+- **Class-naming convention** for generated CSS: simple layer-name-slug classes (`.hero-title`) vs BEM (`.hero__title--large`) vs scoped/hashed classes. Given your semantic/readable-output goal, plain descriptive-slug classes derived from Figma layer names are the simplest match — BEM adds ceremony a static-HTML-export user probably doesn't need, but worth a quick gut-check once you see real output.
+- **Unit rounding/snapping** — decide a default (e.g., round to nearest integer px, or snap to a spacing scale like 4/8px) vs. emitting Figma's raw computed values (which produces the widely-mocked `13.333333333px` complaint from §4).
+- **Asset export defaults**: SVG for vector/icon layers, PNG/JPG for raster fills, and whether images are inlined as Base64 (simpler single-file copy/paste, matches your "fast export" goal) or exported as separate files (cleaner, but needs a zip/download flow rather than pure clipboard copy). Given you've chosen "copy to clipboard" as a primary flow, **Base64-inline by default, with an optional zip-download for users who want separate files**, is the natural fit.
+- **Tooling**: `create-figma-plugin` (batteries-included Preact UI components matching Figma's own look, zero-config bundling) vs `Plugma` (Vite-based, framework-agnostic, faster hot-reload DX). Either works; `create-figma-plugin` is the lower-friction default for a settings-panel-heavy UI like yours, `Plugma` if you'd rather use React/Vue and want a faster dev loop. This is a "just pick one" decision, not a strategic one.
+
+### 6.2 Important platform constraint you should know before writing "let everyone use it" anywhere in your positioning
+
+You said you want the plugin usable by everyone, not gated by seat type, and free — good, that's your call to make on **your** side. But there's a **Figma-platform-level restriction that applies regardless of your plugin's price or your intentions**: confirmed via the Figma forum, **only users with "can edit" access to a file can run *any* plugin at all** — Viewers and comment-only seat holders **cannot run plugins**, including entirely read-only, non-destructive ones like yours, because Figma's permission model doesn't currently distinguish "read-only plugin" from "editing plugin." There's an open, unresolved feature request from the community asking Figma to allow non-modifying plugins for viewers, but it hasn't shipped. **Practical implication**: your plugin will genuinely be free and open to *anyone who can edit a file* (which includes every Starter/free-plan editor — plugins are confirmed free and unrestricted on the free Starter plan itself), but you should phrase your positioning as "free for every Figma editor," not "free for every Figma user," to avoid an inevitable string of confused support questions from Viewer-seat users who can't launch it.
 
 ---
 
@@ -235,6 +288,24 @@ Based on the above, a differentiated position for `snn-design-to-html-css` could
 - [Export Figma variables to CSS custom properties using Style Dictionary](https://dev.to/alexandersstudi/export-figma-variables-to-css-custom-properties-using-style-dictionary-3pjh)
 - [Figma CSS Variables Converter & Exporter (Community plugin)](https://www.figma.com/community/plugin/1580865604483451262/figma-css-variables-converter-exporter)
 
+**Absolute→flex inference / layout heuristics research**
+- [bernaferrari/FigmaToCode — `commonPosition.ts` source](https://github.com/bernaferrari/FigmaToCode/blob/main/packages/backend/src/common/commonPosition.ts) (fetched and read directly to confirm no clustering/heuristic logic exists — decision is purely flag-based)
+- [Figma Forum: access to the "Suggest Auto Layout" feature in the plugin API](https://forum.figma.com/ask-the-community-7/access-to-the-suggest-auto-layout-feature-in-the-plugin-api-9074) (confirms Shift+A's algorithm is not exposed via API)
+- [Figma Forum: random frames defaulting to absolute position when applying auto layout](https://forum.figma.com/ask-the-community-7/random-frames-defaulting-to-absolute-position-when-applying-auto-layout-12144)
+- [VIPS: a Vision-based Page Segmentation Algorithm (Microsoft Research, Cai & Yu)](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/tr-2003-79.pdf) — classic algorithm adapted here as the basis for a geometry-based row/column/grouping heuristic
+- [jensonwong.com: Behind Figma Auto Layout](https://www.jensonwong.com/blog/behind-autolayout) — confirms Auto Layout is a GUI over CSS flexbox and that non-Auto-Layout content is genuinely absolutely positioned with no relational data
+- Figma2Code: Automating Multimodal Design to Code in the Wild (arXiv 2604.13648) — academic paper found to exist and be relevant, but its PDF text extraction failed in this research pass (binary/corrupted stream); worth reading directly from arXiv before finalizing the layout-inference design
+
+**Editor component (Monaco vs CodeMirror) research**
+- [Sourcegraph: Migrating from Monaco Editor to CodeMirror](https://sourcegraph.com/blog/migrating-monaco-codemirror)
+- [ilyalesik/figma-code-playground](https://github.com/ilyalesik/figma-code-playground) — precedent for bundling Monaco inside a Figma plugin, though undocumented bundling approach
+- [Embeddable Monaco Editor](https://lukasbach.com/projects/embeddable-monaco/)
+
+**Access/seat restrictions**
+- [Figma Forum: can users with view access only run plugins](https://forum.figma.com/archive-21/can-users-with-view-access-only-run-plugins-35947) — confirms only "can edit" users can run any plugin
+- [Figma Forum: Plugin for viewers (feature request)](https://forum.figma.com/suggest-a-feature-11/plugin-for-viewers-11157)
+- [Figma Pricing FAQs](https://www.figma.com/pricing-faq/) — confirms plugins are free/unrestricted on the Starter (free) plan for editors
+
 ---
 
-*Next step suggested: once you've made the decisions in §6, we can turn this into a short PRD/spec and start scaffolding the plugin (recommend `create-figma-plugin` unless you have a strong reason to prefer Plugma's Vite-based DX).*
+*Next step suggested: turn this into a short PRD/spec — the big product decisions (§0) are locked, so the remaining work is the §6.1 detail decisions plus designing the internal normalized-tree data model (§5.1) before writing the Auto Layout → flexbox generator (§3.3) and, later, the absolute-layout heuristic (§3.3.1).*
