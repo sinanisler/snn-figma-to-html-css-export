@@ -1,13 +1,25 @@
 import type { RawAsset } from '../shared/types';
 import { escapeAttr, escapeHtml, type Style } from './format';
-import type { IRDocument, IRNode } from './ir';
+import { classList, primaryClass, walk, type IRDocument, type IRLink, type IRNode, type IRRule } from './ir';
+import { toUtilities } from './tailwind';
 
 /** inline: data URIs · files: relative asset paths (zip) · preview: shortened data URIs for display */
 export type AssetMode = 'inline' | 'files' | 'preview';
+export type Dialect = 'html' | 'jsx' | 'email';
+export type Styling = 'css' | 'tailwind';
 
-export type Emitted = { markup: string; css: string; full: string };
+export type RenderOptions = {
+	assets: Map<string, RawAsset>;
+	assetMode: AssetMode;
+	/** Path prefix for assets in files mode ("assets/" or "/assets/"). */
+	assetPrefix?: string;
+	inlineSvg?: boolean;
+	dialect?: Dialect;
+	styling?: Styling;
+	linkHref?: (link: IRLink) => string;
+};
 
-const RESET = `*,
+export const RESET = `*,
 *::before,
 *::after {
   box-sizing: border-box;
@@ -15,26 +27,43 @@ const RESET = `*,
   padding: 0;
 }
 
-img {
+img,
+svg {
   display: block;
 }
 
-button {
+button,
+input,
+textarea,
+select {
   border: none;
   background: none;
   font: inherit;
   color: inherit;
   text-align: inherit;
+}
+
+button {
   cursor: pointer;
 }
 
 a {
   color: inherit;
   text-decoration: none;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
+ul > li:not([class]),
+ol > li:not([class]) {
+  display: contents;
 }`;
 
 const TOKEN = /__ASSET__(.+?)__/g;
-const VOID_TAGS = new Set(['img']);
+const VOID_TAGS = new Set(['img', 'input']);
 
 export function toBase64(bytes: Uint8Array): string {
 	let binary = '';
@@ -44,13 +73,15 @@ export function toBase64(bytes: Uint8Array): string {
 	return btoa(binary);
 }
 
-function assetResolver(assets: Map<string, RawAsset>, mode: AssetMode) {
+export type Resolver = (value: string) => string;
+
+export function assetResolver(assets: Map<string, RawAsset>, mode: AssetMode, prefix = 'assets/'): Resolver {
 	const cache = new Map<string, string>();
 	return (value: string) =>
 		value.replace(TOKEN, (_, id: string) => {
 			const asset = assets.get(id);
 			if (!asset) return '';
-			if (mode === 'files') return `assets/${asset.name}`;
+			if (mode === 'files') return `${prefix}${asset.name}`;
 			if (mode === 'preview') {
 				const kb = Math.max(1, Math.round(asset.bytes.length / 1024));
 				return `data:${asset.mime};base64,…(${asset.name}, ${kb} KB)`;
@@ -64,82 +95,242 @@ function assetResolver(assets: Map<string, RawAsset>, mode: AssetMode) {
 		});
 }
 
-function rule(selector: string, style: Style, resolve: (v: string) => string): string {
-	const lines = Object.entries(style).map(([k, v]) => `  ${k}: ${resolve(v)};`);
-	return lines.length ? `${selector} {\n${lines.join('\n')}\n}` : '';
-}
-
-const indent = (text: string, spaces: number) =>
+export const indent = (text: string, spaces: number) =>
 	text
 		.split('\n')
 		.map((line) => (line ? ' '.repeat(spaces) + line : line))
 		.join('\n');
 
-function renderRuns(node: IRNode): string {
-	const inner = (node.runs ?? [])
-		.map((run) => {
-			const text = escapeHtml(run.text).replace(/\r\n|\n|\u2028|\u2029/g, '<br>');
-			const cls = run.className ? ` class="${run.className}"` : '';
-			if (run.href) return `<a href="${escapeAttr(run.href)}"${cls}>${text}</a>`;
-			return cls ? `<span${cls}>${text}</span>` : text;
-		})
-		.join('');
-	return node.wrapRuns ? `<span>${inner}</span>` : inner;
+function declarations(style: Style, resolve: Resolver, pad = '  '): string[] {
+	return Object.entries(style).map(([k, v]) => `${pad}${k}: ${resolve(v)};`);
 }
 
-function renderNode(node: IRNode, depth: number, resolve: (v: string) => string): string {
-	const pad = '  '.repeat(depth);
-	const attrs = [`class="${node.className}"`];
-	for (const [k, v] of Object.entries(node.attrs)) attrs.push(`${k}="${escapeAttr(resolve(v))}"`);
-	const open = `<${node.tag} ${attrs.join(' ')}>`;
-	if (VOID_TAGS.has(node.tag)) return pad + open;
-	if (node.runs) return `${pad}${open}${renderRuns(node)}</${node.tag}>`;
-	if (node.children.length === 0) return `${pad}${open}</${node.tag}>`;
-	return [pad + open, ...node.children.map((c) => renderNode(c, depth + 1, resolve)), `${pad}</${node.tag}>`].join('\n');
+function rule(selector: string, style: Style, resolve: Resolver): string {
+	const lines = declarations(style, resolve);
+	return lines.length ? `${selector} {\n${lines.join('\n')}\n}` : '';
 }
 
-export function emit(doc: IRDocument, assets: Map<string, RawAsset>, mode: AssetMode): Emitted {
-	const resolve = assetResolver(assets, mode);
-	const rules: string[] = [];
-	const runClasses = new Set<string>();
-	const walk = (node: IRNode) => {
-		const r = rule(`.${node.className}`, node.style, resolve);
-		if (r) rules.push(r);
-		for (const run of node.runs ?? []) {
-			if (!run.className || runClasses.has(run.className)) continue;
-			runClasses.add(run.className);
-			const rr = rule(`.${run.className}`, run.style, resolve);
-			if (rr) rules.push(rr);
-		}
-		node.children.forEach(walk);
-	};
-	doc.roots.forEach(walk);
+/** List wrappers have no class; rules aimed at them apply to the element inside. */
+const ruleTarget = (n: IRNode) => (n.wrapper && n.children[0] ? n.children[0] : n);
 
-	const header = ['/* Generated by SNN Design to HTML/CSS */'];
-	if (doc.fonts.length) {
-		const list = doc.fonts.map((f) => `${f.family} ${f.weights.join('/')}`).join(', ');
-		header.push(`/* Fonts used (not embedded): ${list} */`);
+function selectorFor(r: IRRule): string | null {
+	const target = primaryClass(ruleTarget(r.target));
+	if (!target) return null;
+	let sel = `.${target}${r.pseudo ?? ''}`;
+	if (r.scope) {
+		const scope = primaryClass(r.scope.node);
+		if (!scope) return null;
+		sel = r.scope.node === r.target ? `.${scope}${r.scope.pseudo}${r.pseudo ?? ''}` : `.${scope}${r.scope.pseudo} ${sel}`;
 	}
-	const variables = doc.variables.length
-		? `:root {\n${doc.variables.map((v) => `  ${v.name}: ${v.value};`).join('\n')}\n}`
-		: '';
-	const css = [header.join('\n'), RESET, variables, ...rules].filter(Boolean).join('\n\n') + '\n';
+	return sel;
+}
 
-	const markup = doc.roots.map((n) => renderNode(n, 0, resolve)).join('\n');
-	const head =
-		mode === 'files' ? '  <link rel="stylesheet" href="styles.css">' : `  <style>\n${indent(css.trimEnd(), 4)}\n  </style>`;
-	const full = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${escapeHtml(doc.title)}</title>
-${head}
-</head>
-<body>
-${indent(markup, 2)}
-</body>
-</html>
-`;
-	return { markup: markup + '\n', css, full };
+export type CssOptions = {
+	fontImport?: string | null;
+	/** Compiled Tailwind: `@import "tailwindcss"` plus variables. */
+	tailwind?: boolean;
+	/** Tailwind from the browser CDN: variables only. */
+	tailwindVarsOnly?: boolean;
+};
+
+/** Stylesheet for the whole document. With tailwind, only what utilities can't express. */
+export function cssText(doc: IRDocument, resolve: Resolver, opts: CssOptions = {}): string {
+	const parts: string[] = [];
+	if (opts.tailwind) parts.push('@import "tailwindcss";');
+	if (opts.fontImport) parts.push(`@import url("${opts.fontImport}");`);
+	const header = ['/* Generated by SNN Design to HTML/CSS */'];
+	if (doc.fonts.length) header.push(`/* Fonts: ${doc.fonts.map((f) => `${f.family} ${[...new Set([...f.weights, ...f.italicWeights])].join('/')}`).join(', ')} */`);
+	parts.push(header.join('\n'));
+	const utilities = opts.tailwind || opts.tailwindVarsOnly;
+	if (!utilities) parts.push(RESET);
+	if (doc.variables.length) parts.push(`:root {\n${doc.variables.map((v) => `  ${v.name}: ${v.value};`).join('\n')}\n}`);
+	if (utilities) return parts.join('\n\n') + '\n';
+
+	for (const c of doc.sharedClasses) parts.push(rule(`.${c.name}`, c.style, resolve));
+
+	const emitted = new Set<string>();
+	const runClasses = new Set<string>();
+	for (const page of doc.pages) {
+		walk(page.roots, (node) => {
+			if (node.className && !emitted.has(node.className)) {
+				emitted.add(node.className);
+				parts.push(rule(`.${node.className}`, node.style, resolve));
+			}
+			for (const run of node.runs ?? []) {
+				if (!run.className || runClasses.has(run.className)) continue;
+				runClasses.add(run.className);
+				parts.push(rule(`.${run.className}`, run.style, resolve));
+			}
+		});
+	}
+
+	const byMedia = new Map<string, string[]>();
+	for (const r of doc.rules) {
+		const sel = selectorFor(r);
+		if (!sel) continue;
+		if (!r.media) {
+			parts.push(rule(sel, r.style, resolve));
+			continue;
+		}
+		const lines = declarations(r.style, resolve, '    ');
+		if (lines.length) byMedia.set(r.media, [...(byMedia.get(r.media) ?? []), `  ${sel} {\n${lines.join('\n')}\n  }`]);
+	}
+	for (const m of doc.media) {
+		const blocks = byMedia.get(m);
+		if (blocks) parts.push(`@media ${m} {\n${blocks.join('\n\n')}\n}`);
+	}
+	return parts.filter(Boolean).join('\n\n') + '\n';
+}
+
+// ---------- markup ----------
+
+const PSEUDO_VARIANT: Record<string, string> = {
+	':hover': 'hover',
+	':focus-visible': 'focus-visible',
+	':active': 'active',
+	'::placeholder': 'placeholder',
+};
+
+type TailwindIndex = { extra: Map<IRNode, string[]>; groups: Map<IRNode, string> };
+
+/** Media, state and pseudo rules become variant-prefixed utilities on the nodes they target. */
+function tailwindIndex(doc: IRDocument): TailwindIndex {
+	const extra = new Map<IRNode, string[]>();
+	const groups = new Map<IRNode, string>();
+	const add = (n: IRNode, cls: string[]) => extra.set(n, [...(extra.get(n) ?? []), ...cls]);
+	for (const r of doc.rules) {
+		const target = ruleTarget(r.target);
+		let variant = '';
+		if (r.media) {
+			const m = /max-width:\s*(\d+)px/.exec(r.media);
+			if (!m) continue;
+			variant = `max-[${m[1]}px]:`;
+		}
+		if (r.scope) {
+			const pseudo = PSEUDO_VARIANT[r.scope.pseudo];
+			if (!pseudo) continue;
+			if (r.scope.node === r.target) variant += `${pseudo}:`;
+			else {
+				let g = groups.get(r.scope.node);
+				if (!g) {
+					g = `g${groups.size + 1}`;
+					groups.set(r.scope.node, g);
+				}
+				variant += `group-${pseudo}/${g}:`;
+			}
+		}
+		if (r.pseudo) variant += `${PSEUDO_VARIANT[r.pseudo] ?? ''}:`;
+		add(target, toUtilities(r.style).classes.map((c) => variant + c));
+	}
+	return { extra, groups };
+}
+
+const camel = (k: string) => k.replace(/^-webkit-/, 'Webkit-').replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+
+function jsxText(s: string): string {
+	return escapeHtml(s).replace(/[{}]/g, (c) => `{'${c}'}`);
+}
+
+function svgMarkup(bytes: Uint8Array, cls: string, alt: string, dialect: Dialect, seq: number): string | null {
+	if (!bytes.length || typeof TextDecoder === 'undefined') return null;
+	let svg = new TextDecoder().decode(bytes).replace(/<\?xml[^>]*>\s*/, '').trim();
+	if (!svg.startsWith('<svg')) return null;
+	const ids = [...svg.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]);
+	for (const id of ids) {
+		const safe = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		svg = svg
+			.replace(new RegExp(`id="${safe}"`, 'g'), `id="s${seq}-${id}"`)
+			.replace(new RegExp(`url\\(#${safe}\\)`, 'g'), `url(#s${seq}-${id})`)
+			.replace(new RegExp(`href="#${safe}"`, 'g'), `href="#s${seq}-${id}"`);
+	}
+	const label = alt ? ` role="img" aria-label="${escapeAttr(alt)}"` : ' aria-hidden="true"';
+	svg = svg.replace(/<svg\b/, `<svg class="${cls}"${label}`);
+	if (dialect === 'jsx') {
+		svg = svg
+			.replace(/\sclass="/g, ' className="')
+			.replace(/\s(xlink|xml):([a-z]+)=/g, (_, ns: string, name: string) => ` ${ns}${name[0].toUpperCase()}${name.slice(1)}=`)
+			.replace(/\s((?!data-|aria-)[a-z]+(?:-[a-z]+)+)=/g, (_, name: string) => ` ${camel(name)}=`);
+	}
+	return svg.replace(/>\s+</g, '><');
+}
+
+export function renderMarkup(doc: IRDocument, pageIndex: number, opts: RenderOptions): string {
+	const dialect = opts.dialect ?? 'html';
+	const styling = opts.styling ?? 'css';
+	const resolve = assetResolver(opts.assets, opts.assetMode, opts.assetPrefix);
+	const shared = new Map(doc.sharedClasses.map((c) => [c.name, c.style]));
+	const tw = styling === 'tailwind' ? tailwindIndex(doc) : null;
+	const classAttr = dialect === 'jsx' ? 'className' : 'class';
+	let svgSeq = 0;
+
+	const merged = (n: IRNode): Style => Object.assign({}, ...n.shared.map((s) => shared.get(s) ?? {}), n.style);
+
+	const styleAttr = (style: Style): string => {
+		const entries = Object.entries(style);
+		if (!entries.length) return '';
+		if (dialect === 'jsx') return ` style={{ ${entries.map(([k, v]) => `${camel(k)}: ${JSON.stringify(resolve(v))}`).join(', ')} }}`;
+		return ` style="${escapeAttr(entries.map(([k, v]) => `${k}: ${resolve(v)}`).join('; '))}"`;
+	};
+
+	/** class and style attributes for a node or run. */
+	const presentation = (node: IRNode | null, style: Style, classes: string[]): string => {
+		if (dialect === 'email') return styleAttr(style);
+		if (tw) {
+			const u = toUtilities(style);
+			const list = [...u.classes];
+			if (node) {
+				const g = tw.groups.get(node);
+				if (g) list.unshift(`group/${g}`);
+				list.push(...(tw.extra.get(node) ?? []));
+			}
+			return (list.length ? ` ${classAttr}="${list.join(' ')}"` : '') + styleAttr(u.inline);
+		}
+		return classes.length ? ` ${classAttr}="${classes.join(' ')}"` : '';
+	};
+
+	const text = (s: string) =>
+		dialect === 'jsx'
+			? jsxText(s).replace(/\r\n|\n|\u2028|\u2029/g, '<br />')
+			: escapeHtml(s).replace(/\r\n|\n|\u2028|\u2029/g, '<br>');
+
+	const renderRuns = (node: IRNode): string => {
+		const inner = (node.runs ?? [])
+			.map((run) => {
+				const body = text(run.text);
+				const attrs = presentation(null, run.style, run.className ? [run.className] : []);
+				if (run.href) return `<a href="${escapeAttr(run.href)}"${attrs}>${body}</a>`;
+				return attrs ? `<span${attrs}>${body}</span>` : body;
+			})
+			.join('');
+		if (node.tag === 'select') return `<option>${inner}</option>`;
+		return node.wrapRuns ? `<span>${inner}</span>` : inner;
+	};
+
+	const renderNode = (node: IRNode, depth: number): string => {
+		const pad = '  '.repeat(depth);
+		const style = dialect === 'email' || tw ? merged(node) : {};
+		const alt = node.attrs.alt ?? '';
+		if (node.svgAsset && opts.inlineSvg && dialect !== 'email') {
+			const asset = opts.assets.get(node.svgAsset);
+			const cls = tw ? toUtilities(style).classes.join(' ') : classList(node).join(' ');
+			const svg = asset && svgMarkup(asset.bytes, cls, alt, dialect, ++svgSeq);
+			if (svg) return pad + svg;
+		}
+
+		// Classless list wrappers get display: contents from the reset stylesheet.
+		let attrs = node.wrapper && !tw && dialect !== 'email' ? '' : presentation(node, style, classList(node));
+		for (const [k, v] of Object.entries(node.attrs)) {
+			const name = dialect === 'jsx' && k === 'for' ? 'htmlFor' : k;
+			attrs += ` ${name}="${escapeAttr(resolve(v))}"`;
+		}
+		if (node.link) attrs += ` href="${escapeAttr(opts.linkHref ? opts.linkHref(node.link) : '#')}"`;
+
+		const open = `<${node.tag}${attrs}`;
+		if (VOID_TAGS.has(node.tag)) return `${pad}${open}${dialect === 'jsx' ? ' />' : '>'}`;
+		if (node.runs) return `${pad}${open}>${renderRuns(node)}</${node.tag}>`;
+		if (node.children.length === 0) return `${pad}${open}></${node.tag}>`;
+		return [`${pad}${open}>`, ...node.children.map((c) => renderNode(c, depth + 1)), `${pad}</${node.tag}>`].join('\n');
+	};
+
+	return doc.pages[pageIndex].roots.map((n) => renderNode(n, 0)).join('\n');
 }

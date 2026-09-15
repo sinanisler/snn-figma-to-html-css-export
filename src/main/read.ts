@@ -4,10 +4,14 @@ import type {
 	RawAutoLayout,
 	RawChildLayout,
 	RawEffect,
+	RawLink,
 	RawNode,
 	RawPaint,
 	RawText,
 	RawTextSegment,
+	RawState,
+	PseudoState,
+	ReadOptions,
 	ReadResult,
 	ReadWarning,
 	RGBA,
@@ -26,7 +30,11 @@ const IDENTITY: Mat = [
 	[0, 1, 0],
 ];
 
-type Ctx = {
+export type Ctx = {
+	options: ReadOptions;
+	/** Variant state trees per main component id. */
+	stateCache: Map<string, RawState[]>;
+	inState: boolean;
 	assets: Map<string, RawAsset>;
 	assetNames: Set<string>;
 	variables: Record<string, VariableMeta>;
@@ -37,21 +45,34 @@ type Ctx = {
 	onProgress: (done: number, total: number) => void;
 };
 
-export async function readSelection(
-	nodes: readonly SceneNode[],
-	onProgress: (done: number, total: number) => void,
-): Promise<ReadResult> {
-	const start = Date.now();
-	const ctx: Ctx = {
+export function createCtx(
+	options: ReadOptions,
+	total = 0,
+	onProgress: (done: number, total: number) => void = () => {},
+): Ctx {
+	return {
+		options,
+		stateCache: new Map(),
+		inState: false,
 		assets: new Map(),
 		assetNames: new Set(),
 		variables: {},
 		styleNames: new Map(),
 		warnings: [],
 		done: 0,
-		total: nodes.reduce((sum, n: N) => sum + 1 + (typeof n.findAll === 'function' ? n.findAll().length : 0), 0),
+		total,
 		onProgress,
 	};
+}
+
+export async function readSelection(
+	nodes: readonly SceneNode[],
+	onProgress: (done: number, total: number) => void,
+	options: ReadOptions,
+): Promise<ReadResult> {
+	const start = Date.now();
+	const total = nodes.reduce((sum, n: N) => sum + 1 + (typeof n.findAll === 'function' ? n.findAll().length : 0), 0);
+	const ctx = createCtx(options, total, onProgress);
 	const roots: RawNode[] = [];
 	for (const node of nodes) {
 		const raw = await readNode(node, null, undefined, ctx, true);
@@ -122,6 +143,10 @@ async function readNode(
 	};
 
 	if (parentLayout && !isRoot) raw.child = readChildLayout(n, parentLayout);
+	if (isRoot) raw.topLevel = n.parent?.type === 'PAGE';
+	const link = readLink(n);
+	if (link) raw.link = link;
+	if (n.type === 'INSTANCE') await readComponent(n, raw, ctx);
 
 	if (exportKind) {
 		raw.exportAsset = await exportNodeAsset(n, exportKind, ctx);
@@ -148,6 +173,74 @@ async function readNode(
 		}
 	}
 	return raw;
+}
+
+// ---------- prototype links & components ----------
+
+function readLink(n: N): RawLink | undefined {
+	let reactions: Reaction[];
+	try {
+		reactions = Array.isArray(n.reactions) ? n.reactions : [];
+	} catch {
+		return undefined;
+	}
+	for (const r of reactions) {
+		const trigger = r.trigger?.type;
+		if (trigger && trigger !== 'ON_CLICK' && trigger !== 'ON_PRESS') continue;
+		for (const a of r.actions ?? (r.action ? [r.action] : [])) {
+			if (a.type === 'URL' && a.url) return { url: a.url, newTab: a.openInNewTab === true };
+			if (a.type === 'NODE' && a.destinationId && (a.navigation === 'NAVIGATE' || a.navigation === 'SCROLL_TO'))
+				return { nodeId: a.destinationId };
+		}
+	}
+	return undefined;
+}
+
+const STATE_PROP = /^(state|status|interaction|mode)$/i;
+const DEFAULT_STATE = /^(default|rest|normal|idle|enabled|base)$/i;
+const STATE_VALUES: [RegExp, PseudoState][] = [
+	[/^hover(ed)?$/i, 'hover'],
+	[/^focus(ed)?$/i, 'focus'],
+	[/^(pressed|active|press)$/i, 'active'],
+];
+
+async function readComponent(n: N, raw: RawNode, ctx: Ctx): Promise<void> {
+	let main: N = null;
+	try {
+		main = await n.getMainComponentAsync();
+	} catch {
+		main = null;
+	}
+	if (!main) return;
+	const set = main.parent?.type === 'COMPONENT_SET' ? main.parent : null;
+	raw.component = { id: (set ?? main).id, name: (set ?? main).name };
+	if (!set || ctx.inState) return;
+
+	const props: Record<string, string> = main.variantProperties ?? {};
+	const stateKey = Object.keys(props).find((k) => STATE_PROP.test(k));
+	if (!stateKey || !DEFAULT_STATE.test(props[stateKey])) return;
+
+	if (!ctx.stateCache.has(main.id)) {
+		const states: RawState[] = [];
+		ctx.inState = true;
+		const warningCount = ctx.warnings.length;
+		try {
+			for (const sibling of set.children as N[]) {
+				const sp: Record<string, string> = sibling.variantProperties ?? {};
+				const same = Object.keys(props).every((k) => k === stateKey || sp[k] === props[k]);
+				const state = same ? STATE_VALUES.find(([re]) => re.test(sp[stateKey] ?? ''))?.[1] : undefined;
+				if (!state || states.some((s) => s.state === state)) continue;
+				const node = await readNode(sibling, null, undefined, ctx, true);
+				if (node) states.push({ state, node });
+			}
+		} finally {
+			ctx.inState = false;
+			ctx.warnings.length = warningCount;
+		}
+		ctx.stateCache.set(main.id, states);
+	}
+	const states = ctx.stateCache.get(main.id)!;
+	if (states.length) raw.states = states;
 }
 
 function isVectorLike(n: N): boolean {
@@ -358,7 +451,7 @@ const rgba = (c: { r: number; g: number; b: number; a?: number }, opacity = 1): 
 	a: (c.a ?? 1) * opacity,
 });
 
-async function readPaints(paints: unknown, n: N, ctx: Ctx): Promise<RawPaint[]> {
+export async function readPaints(paints: unknown, n: N, ctx: Ctx): Promise<RawPaint[]> {
 	if (!Array.isArray(paints)) return [];
 	const out: RawPaint[] = [];
 	for (const p of paints as Paint[]) {
@@ -403,7 +496,7 @@ async function readPaints(paints: unknown, n: N, ctx: Ctx): Promise<RawPaint[]> 
 	return out;
 }
 
-async function readEffects(effects: unknown, ctx: Ctx): Promise<RawEffect[]> {
+export async function readEffects(effects: unknown, ctx: Ctx): Promise<RawEffect[]> {
 	if (!Array.isArray(effects)) return [];
 	const out: RawEffect[] = [];
 	for (const e of effects as Effect[]) {
@@ -524,6 +617,10 @@ async function imageAsset(hash: string, nodeName: string, ctx: Ctx): Promise<str
 	if (ctx.assets.has(id)) return id;
 	const image = figma.getImageByHash(hash);
 	if (!image) return null;
+	if (!ctx.options.assetBytes) {
+		ctx.assets.set(id, { id, name: assetName(nodeName, 'png', ctx), mime: 'image/png', ext: 'png', bytes: new Uint8Array() });
+		return id;
+	}
 	try {
 		const bytes = await image.getBytesAsync();
 		const { mime, ext } = sniffImage(bytes);
@@ -536,11 +633,17 @@ async function imageAsset(hash: string, nodeName: string, ctx: Ctx): Promise<str
 
 async function exportNodeAsset(n: N, kind: 'SVG' | 'PNG', ctx: Ctx): Promise<string | undefined> {
 	const id = `node-${n.id}`;
+	if (!ctx.options.assetBytes) {
+		const ext = kind === 'SVG' ? 'svg' : 'png';
+		const mime = kind === 'SVG' ? 'image/svg+xml' : 'image/png';
+		ctx.assets.set(id, { id, name: assetName(n.name, ext, ctx), mime, ext, bytes: new Uint8Array() });
+		return id;
+	}
 	try {
 		const bytes: Uint8Array =
 			kind === 'SVG'
 				? await n.exportAsync({ format: 'SVG', useAbsoluteBounds: true })
-				: await n.exportAsync({ format: 'PNG', useAbsoluteBounds: true, constraint: { type: 'SCALE', value: 2 } });
+				: await n.exportAsync({ format: 'PNG', useAbsoluteBounds: true, constraint: { type: 'SCALE', value: ctx.options.rasterScale } });
 		const ext = kind === 'SVG' ? 'svg' : 'png';
 		ctx.assets.set(id, {
 			id,

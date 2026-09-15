@@ -32,7 +32,10 @@ const MESSAGES: Record<string, string> = {
 	TEXT_LIST_SIMPLIFIED: 'Bulleted/numbered list exported as plain text.',
 	PARAGRAPH_SPACING_IGNORED: 'Paragraph spacing ignored (lines joined with <br>).',
 	VARIABLE_MODE_CONFLICT: 'Variable resolves to a different value here — literal value used.',
-	CUSTOM_FONT_NOT_EMBEDDED: 'Font is not embedded — load it with @font-face or a font service.',
+	CUSTOM_FONT_NOT_EMBEDDED: 'Commercial or system font, not on Google Fonts — self-host it with @font-face.',
+	FORM_CONTROL_SIMPLIFIED: 'Form control built from its first text layer — icons and extra layers inside were dropped.',
+	LINK_TARGET_OUTSIDE: 'Prototype link points to a frame outside the export — href="#" used.',
+	BREAKPOINT_CONTENT_DIFFERS: 'Text differs between breakpoint frames — the text of the largest frame is used.',
 };
 
 export function describeWarning(code: string): string {

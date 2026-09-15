@@ -1,13 +1,19 @@
 import { defaultKeymap } from '@codemirror/commands';
 import { css } from '@codemirror/lang-css';
 import { html } from '@codemirror/lang-html';
+import { javascript } from '@codemirror/lang-javascript';
 import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, syntaxHighlighting } from '@codemirror/language';
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import { Compartment, EditorState } from '@codemirror/state';
 import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark';
 import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view';
 
-export type Viewer = { show(text: string, lang: 'html' | 'css'): void; setWrap(on: boolean): void };
+export type ViewerLang = 'html' | 'css' | 'jsx' | 'vue' | 'svelte' | 'json' | 'js';
+
+export type Viewer = { show(text: string, lang: ViewerLang): void; setWrap(on: boolean): void };
+
+const languageFor = (lang: ViewerLang) =>
+	lang === 'css' ? css() : lang === 'jsx' || lang === 'js' ? javascript({ jsx: true }) : lang === 'json' ? javascript() : html();
 
 const theme = EditorView.theme({
 	'&': {
@@ -72,7 +78,7 @@ export function createViewer(parent: HTMLElement): Viewer {
 		show(text, lang) {
 			view.dispatch({
 				changes: { from: 0, to: view.state.doc.length, insert: text },
-				effects: [language.reconfigure(lang === 'css' ? css() : html()), EditorView.scrollIntoView(0)],
+				effects: [language.reconfigure(languageFor(lang)), EditorView.scrollIntoView(0)],
 				selection: { anchor: 0 },
 			});
 		},

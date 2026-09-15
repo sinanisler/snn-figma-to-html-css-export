@@ -1,13 +1,47 @@
-import { DEFAULT_SETTINGS, type MainToUi, type Settings, type UiToMain } from '../shared/types';
+import { buildDocument } from '../core/build';
+import { codegenSections, generate } from '../core/generate';
+import { DEFAULT_SETTINGS, type Format, type MainToUi, type Settings, type UiToMain } from '../shared/types';
 import { readSelection } from './read';
+import { readTokens } from './tokens';
 
 const MIN_W = 420, MAX_W = 1600, MIN_H = 360, MAX_H = 1200;
 
+async function loadSettings(): Promise<Settings> {
+	const saved = (await figma.clientStorage.getAsync('settings')) as Partial<Settings> | undefined;
+	return { ...DEFAULT_SETTINGS, ...saved };
+}
+
+/** Dev Mode: show code for the inspected layer in the Inspect panel. */
+function registerCodegen() {
+	figma.codegen.on('generate', async ({ node, language }) => {
+		const settings = await loadSettings();
+		const result = await readSelection([node], () => {}, { rasterScale: settings.rasterScale, assetBytes: false });
+		const doc = buildDocument(result, {
+			decimals: settings.decimals,
+			useVariables: settings.useVariables,
+			units: settings.units,
+			shareClasses: settings.shareClasses,
+		});
+		const files = generate(doc, {
+			format: language as Format,
+			assets: new Map(result.assets.map((a) => [a.id, a])),
+			assetMode: 'files',
+			googleFonts: false,
+			inlineSvg: false,
+		});
+		return codegenSections(files);
+	});
+}
+
 export default async function () {
+	if (figma.mode === 'codegen') {
+		registerCodegen();
+		return;
+	}
+
 	const savedSize = (await figma.clientStorage.getAsync('size')) as { w: number; h: number } | undefined;
-	const savedSettings = (await figma.clientStorage.getAsync('settings')) as Partial<Settings> | undefined;
 	const size = savedSize ?? { w: 760, h: 640 };
-	const settings: Settings = { ...DEFAULT_SETTINGS, ...savedSettings };
+	const settings = await loadSettings();
 
 	figma.showUI(__html__, { width: size.w, height: size.h, themeColors: true, title: 'SNN Design to HTML/CSS' });
 
@@ -34,12 +68,20 @@ export default async function () {
 				}
 				busy = true;
 				try {
-					const result = await readSelection(selection, (done, total) => post({ type: 'PROGRESS', done, total }));
+					const result = await readSelection(selection, (done, total) => post({ type: 'PROGRESS', done, total }), msg.options);
 					post({ type: 'RESULT', result });
 				} catch (err) {
 					post({ type: 'ERROR', message: err instanceof Error ? err.message : String(err) });
 				} finally {
 					busy = false;
+				}
+				return;
+			}
+			case 'TOKENS': {
+				try {
+					post({ type: 'TOKENS', tokens: await readTokens() });
+				} catch (err) {
+					post({ type: 'ERROR', message: err instanceof Error ? err.message : String(err) });
 				}
 				return;
 			}

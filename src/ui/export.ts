@@ -1,5 +1,4 @@
 import { strToU8, zipSync, type Zippable } from 'fflate';
-import type { RawAsset } from '../shared/types';
 
 /** The async Clipboard API is blocked inside Figma's plugin iframe, so copy via a hidden textarea. */
 export function copyText(text: string): boolean {
@@ -20,16 +19,12 @@ export function copyText(text: string): boolean {
 	return ok;
 }
 
-export function downloadZip(
-	fileName: string,
-	files: { html: string; css: string; assets: RawAsset[] },
-): void {
-	const entries: Zippable = {
-		'index.html': strToU8(files.html),
-		'styles.css': strToU8(files.css),
-	};
-	// Images are already compressed; storing them avoids wasted CPU.
-	for (const asset of files.assets) entries[`assets/${asset.name}`] = [asset.bytes, { level: 0 }];
+export function downloadZip(fileName: string, files: Record<string, string | Uint8Array>): void {
+	const entries: Zippable = {};
+	for (const [path, content] of Object.entries(files)) {
+		// Images are already compressed; storing them avoids wasted CPU.
+		entries[path] = typeof content === 'string' ? strToU8(content) : [content, { level: 0 }];
+	}
 	const data = zipSync(entries, { level: 6 });
 	const url = URL.createObjectURL(new Blob([data as BlobPart], { type: 'application/zip' }));
 	const link = document.createElement('a');
