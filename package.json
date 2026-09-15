@@ -8,6 +8,7 @@
 		"build": "plugma build",
 		"release": "plugma release",
 		"typecheck": "tsc -p src/main/tsconfig.json && tsc -p src/ui/tsconfig.json",
+		"check:figma": "node scripts/figma-check.mjs",
 		"test": "vitest run"
 	},
 	"dependencies": {
@@ -24,7 +25,9 @@
 	},
 	"devDependencies": {
 		"@figma/plugin-typings": "^1.138.0",
+		"acorn": "^8.18.0",
 		"plugma": "^2.2.4",
+		"quickjs-emscripten": "^0.32.0",
 		"typescript": "~5.9.0",
 		"vite": "^7.0.0",
 		"vitest": "^3.2.0"

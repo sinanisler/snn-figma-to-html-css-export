@@ -6,7 +6,11 @@ export async function readTokens(): Promise<TokensResult> {
 	const ctx = createCtx({ rasterScale: 1, assetBytes: false });
 	const collections: TokenCollection[] = [];
 	const variables = await figma.variables.getLocalVariablesAsync();
-	for (const col of await figma.variables.getLocalVariableCollectionsAsync()) {
+	// Hoist awaited iterables out of the for-of head: async/goal lowering turns
+	// `for (const x of await f())` into `for (const x of yield f())`, which
+	// Figma's (QuickJS-based) VM cannot compile.
+	const variableCollections = await figma.variables.getLocalVariableCollectionsAsync();
+	for (const col of variableCollections) {
 		collections.push({
 			name: col.name,
 			modes: col.modes.map((m) => ({ id: m.modeId, name: m.name })),
@@ -24,11 +28,13 @@ export async function readTokens(): Promise<TokensResult> {
 	}
 
 	const paintStyles = [];
-	for (const style of await figma.getLocalPaintStylesAsync())
+	const localPaintStyles = await figma.getLocalPaintStylesAsync();
+	for (const style of localPaintStyles)
 		paintStyles.push({ name: style.name, paints: await readPaints(style.paints, { name: style.name }, ctx) });
 
 	const effectStyles = [];
-	for (const style of await figma.getLocalEffectStylesAsync())
+	const localEffectStyles = await figma.getLocalEffectStylesAsync();
+	for (const style of localEffectStyles)
 		effectStyles.push({ name: style.name, effects: await readEffects(style.effects, ctx) });
 
 	const textStyles: TokenTextStyle[] = (await figma.getLocalTextStylesAsync()).map((t) => ({
