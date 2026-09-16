@@ -59,7 +59,7 @@ app.innerHTML = `
 		<div class="selection" id="selection">Select a layer to export</div>
 		<select class="format" id="format" title="Output format" aria-label="Output format">${formatOptions}</select>
 		<button class="btn primary" id="generate" disabled title="Ctrl/⌘ + Enter">Generate</button>
-		<button class="btn ai" id="ai-generate" disabled title="Rebuild the page section by section with an AI model (OpenRouter)">${SPARKLE}<span>AI</span></button>
+		<button class="btn ai" id="ai-generate" disabled title="Rebuild the page section by section with an AI model (OpenRouter)">${SPARKLE}<span>AI Generate</span></button>
 	</header>
 	<div class="bar sub">
 		<div class="tabs" id="tabs" role="tablist"></div>
@@ -81,9 +81,9 @@ app.innerHTML = `
 					<button data-dl="tokens">Design tokens<small>All local variables and styles (.css + .json)</small></button>
 				</div>
 			</div>
-			<button class="icon-btn" id="ai-toggle" title="AI settings" aria-label="AI settings" aria-expanded="false">${SPARKLE}</button>
+			<button class="icon-btn" id="ai-toggle" title="AI settings" aria-label="AI settings" aria-expanded="false"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 13.5l7-7M8.5 5.5l2 2"/><path d="M12 1.8v2.4M10.8 3h2.4M13.8 7.3v1.4M13.1 8h1.4M5 2.3v1.4M4.3 3h1.4" stroke-width="1.1"/></svg></button>
 			<button class="icon-btn" id="settings-toggle" title="Settings" aria-label="Settings" aria-expanded="false">
-				<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg>
+				<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2 4h7M13 4h1M2 8h2M8 8h6M2 12h8M14 12h0"/><circle cx="11" cy="4" r="1.6"/><circle cx="6" cy="8" r="1.6"/><circle cx="12" cy="12" r="1.6"/></svg>
 			</button>
 		</div>
 	</div>
@@ -121,7 +121,7 @@ app.innerHTML = `
 			<label class="wide">Model
 				<input id="ai-model" list="ai-models" spellcheck="false" autocomplete="off">
 				<datalist id="ai-models"></datalist>
-				<small>Any OpenRouter model id. Default: ~deepseek/deepseek-pro-latest · <a href="#" data-url="https://openrouter.ai/models">Browse models</a></small>
+				<small>Any OpenRouter model id. Default: deepseek/deepseek-v4.1-flash · <a href="#" data-url="https://openrouter.ai/models">Browse models</a></small>
 			</label>
 			<label>Reasoning
 				<select id="ai-reasoning">
@@ -883,7 +883,7 @@ els.format.addEventListener('change', () => {
 	const before = formatParts(settings.format).styling;
 	update({ format: els.format.value as Format });
 	if (aiStyling && before !== formatParts(settings.format).styling && aiResults.size) {
-		els.status.textContent = 'Styling changed (CSS ↔ Tailwind) — press AI to rebuild the sections for it';
+		els.status.textContent = 'Styling changed (CSS ↔ Tailwind) — press AI Generate to rebuild the sections for it';
 		aiPlans = null;
 		aiResults = new Map();
 		aiStates = new Map();

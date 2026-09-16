@@ -228,7 +228,7 @@ export type AiSettings = {
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
 	apiKey: '',
-	model: '~deepseek/deepseek-pro-latest',
+	model: 'deepseek/deepseek-v4.1-flash',
 	reasoning: 'default',
 	parallel: 3,
 	screenshots: false,
