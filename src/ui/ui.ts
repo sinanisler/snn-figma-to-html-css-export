@@ -1,52 +1,90 @@
 import './styles.css';
 import { buildDocument } from '../core/build';
-import { emit, type AssetMode } from '../core/emit';
+import type { AssetMode } from '../core/emit';
+import { cssSlug } from '../core/format';
+import { formatParts, FORMAT_LABELS, generate, previewDocument, type OutFile } from '../core/generate';
 import type { IRDocument, IRWarning } from '../core/ir';
+import { starterFiles } from '../core/starter';
+import { tokensToCss, tokensToJson } from '../core/tokens';
 import { describeWarning } from '../core/warnings';
-import { DEFAULT_SETTINGS, type MainToUi, type RawAsset, type ReadResult, type Settings, type UiToMain } from '../shared/types';
+import {
+	DEFAULT_SETTINGS,
+	type Format,
+	type MainToUi,
+	type RawAsset,
+	type ReadResult,
+	type Settings,
+	type TokensResult,
+	type UiToMain,
+} from '../shared/types';
 import { copyText, downloadZip } from './export';
 import { createViewer } from './viewer';
 
 const ZIP_RECOMMEND_BYTES = 2_000_000;
 const ZIP_RECOMMEND_COUNT = 8;
+const PREVIEW = 'Preview';
+const DEVICES = [
+	{ label: 'Fit', width: 0 },
+	{ label: '1440', width: 1440 },
+	{ label: '768', width: 768 },
+	{ label: '375', width: 375 },
+];
 
-type Tab = 'full' | 'markup' | 'css';
+const formatOptions = (Object.keys(FORMAT_LABELS) as Format[])
+	.map((f) => `<option value="${f}">${FORMAT_LABELS[f]}</option>`)
+	.join('');
 
 const app = document.getElementById('app')!;
 app.innerHTML = `
 <div class="shell">
 	<header class="bar">
 		<div class="selection" id="selection">Select a layer to export</div>
+		<select class="format" id="format" title="Output format" aria-label="Output format">${formatOptions}</select>
 		<button class="btn primary" id="generate" disabled title="Ctrl/⌘ + Enter">Generate</button>
 	</header>
 	<div class="bar sub">
-		<div class="tabs" role="tablist">
-			<button class="tab active" data-tab="full" role="tab">HTML file</button>
-			<button class="tab" data-tab="markup" role="tab">HTML</button>
-			<button class="tab" data-tab="css" role="tab">CSS</button>
-		</div>
+		<div class="tabs" id="tabs" role="tablist"></div>
 		<div class="actions">
+			<select class="page" id="page" title="Page" aria-label="Page" hidden></select>
+			<div class="devices" id="devices" hidden>${DEVICES.map((d) => `<button data-width="${d.width}" title="${d.width ? `${d.width}px wide` : 'Fit the panel'}">${d.label}</button>`).join('')}</div>
 			<button class="btn" id="copy" disabled>Copy</button>
-			<button class="btn" id="zip" disabled>Download .zip</button>
+			<div class="menu-wrap">
+				<button class="btn" id="download" aria-haspopup="true" aria-expanded="false">Download ▾</button>
+				<div class="menu" id="menu" hidden>
+					<button data-dl="zip" disabled>Files (.zip)<small>Pages, stylesheet and assets</small></button>
+					<button data-dl="starter" disabled>Starter project<small>Vite project — npm install &amp;&amp; npm run dev</small></button>
+					<button data-dl="tokens">Design tokens<small>All local variables and styles (.css + .json)</small></button>
+				</div>
+			</div>
 			<button class="icon-btn" id="settings-toggle" title="Settings" aria-label="Settings" aria-expanded="false">
 				<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg>
 			</button>
 		</div>
 	</div>
 	<div class="settings" id="settings" hidden>
-		<label>Decimal places
-			<select id="opt-decimals"><option value="0">0 (whole px)</option><option value="1">1</option><option value="2">2</option></select>
+		<label>Units
+			<select id="opt-units"><option value="px">px</option><option value="rem">rem</option></select>
 		</label>
-		<label class="check"><input type="checkbox" id="opt-vars"> Figma variables → CSS custom properties</label>
+		<label>Decimals
+			<select id="opt-decimals"><option value="0">0</option><option value="1">1</option><option value="2">2</option></select>
+		</label>
+		<label title="Resolution of layers exported as PNG (masks, unsupported layers). Applies on the next Generate.">Raster
+			<select id="opt-scale"><option value="1">1x</option><option value="2">2x</option><option value="3">3x</option></select>
+		</label>
+		<label class="check"><input type="checkbox" id="opt-vars"> Variables → CSS custom properties</label>
+		<label class="check" title="Components and text styles share one class; identical styles reuse a class"><input type="checkbox" id="opt-share"> Shared classes</label>
+		<label class="check"><input type="checkbox" id="opt-fonts"> Google Fonts link</label>
+		<label class="check"><input type="checkbox" id="opt-svg"> Inline SVG</label>
 		<label class="check"><input type="checkbox" id="opt-inline"> Embed images when copying</label>
-		<label class="check"><input type="checkbox" id="opt-wrap"> Wrap long lines</label>
+		<label class="check"><input type="checkbox" id="opt-wrap"> Wrap lines</label>
 	</div>
 	<div class="banner" id="banner" hidden></div>
 	<main class="editor-wrap">
 		<div class="editor" id="editor"></div>
+		<div class="preview" id="preview" hidden><iframe id="preview-frame" title="Preview" sandbox="allow-scripts"></iframe></div>
 		<div class="empty" id="empty">
 			<p><strong>Select a frame, then press Generate.</strong></p>
-			<p>Auto Layout becomes flexbox/grid, everything else is positioned absolutely.<br>Name your layers for cleaner class names.</p>
+			<p>Select several top-level frames for a multi-page site.<br>Name them “Home / Desktop”, “Home / Mobile” to merge breakpoints.</p>
 		</div>
 	</main>
 	<section class="notes" id="notes" hidden>
@@ -60,16 +98,29 @@ app.innerHTML = `
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const els = {
 	selection: $('selection'),
+	format: $<HTMLSelectElement>('format'),
 	generate: $<HTMLButtonElement>('generate'),
+	tabs: $('tabs'),
+	page: $<HTMLSelectElement>('page'),
+	devices: $('devices'),
 	copy: $<HTMLButtonElement>('copy'),
-	zip: $<HTMLButtonElement>('zip'),
+	download: $<HTMLButtonElement>('download'),
+	menu: $('menu'),
 	settingsToggle: $<HTMLButtonElement>('settings-toggle'),
 	settings: $('settings'),
+	units: $<HTMLSelectElement>('opt-units'),
 	decimals: $<HTMLSelectElement>('opt-decimals'),
+	scale: $<HTMLSelectElement>('opt-scale'),
 	vars: $<HTMLInputElement>('opt-vars'),
+	share: $<HTMLInputElement>('opt-share'),
+	fonts: $<HTMLInputElement>('opt-fonts'),
+	svg: $<HTMLInputElement>('opt-svg'),
 	inline: $<HTMLInputElement>('opt-inline'),
 	wrap: $<HTMLInputElement>('opt-wrap'),
 	banner: $('banner'),
+	editor: $('editor'),
+	preview: $('preview'),
+	frame: $<HTMLIFrameElement>('preview-frame'),
 	empty: $('empty'),
 	notes: $('notes'),
 	notesToggle: $<HTMLButtonElement>('notes-toggle'),
@@ -78,34 +129,102 @@ const els = {
 	status: $('status'),
 	resize: $('resize'),
 };
-const tabs = [...document.querySelectorAll<HTMLButtonElement>('.tab')];
-const viewer = createViewer($('editor'));
+const viewer = createViewer(els.editor);
 
 let settings: Settings = { ...DEFAULT_SETTINGS };
 let result: ReadResult | null = null;
 let assets = new Map<string, RawAsset>();
 let doc: IRDocument | null = null;
-let tab: Tab = 'full';
+let files: OutFile[] = [];
+let tab = '';
+let page = 0;
+let deviceWidth = 0;
+let previewKey = '';
 let selectionIds: string[] = [];
+let selectionNames: string[] = [];
 let generatedIds: string[] = [];
 let focusedId: string | null = null;
 let busy = false;
 
 const send = (msg: UiToMain) => parent.postMessage({ pluginMessage: msg }, '*');
+const notify = (message: string) => send({ type: 'NOTIFY', message });
 
 const formatBytes = (n: number) =>
 	n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 
 const assetBytes = () => [...assets.values()].reduce((sum, a) => sum + a.bytes.length, 0);
 
-function output(mode: AssetMode) {
-	return emit(doc!, assets, mode);
+const baseName = () => cssSlug(result?.roots[0]?.name ?? 'export', 'export');
+
+function output(mode: AssetMode): OutFile[] {
+	return generate(doc!, {
+		format: settings.format,
+		assets,
+		assetMode: mode,
+		googleFonts: settings.googleFonts,
+		inlineSvg: settings.inlineSvg,
+	});
 }
 
-function renderViewer() {
+const pageFiles = (list: OutFile[]) => list.filter((f) => f.page === page || f.page === null);
+
+function renderTabs() {
+	const labels = [PREVIEW, ...pageFiles(files).map((f) => f.label)];
+	if (!labels.includes(tab)) tab = labels[1] ?? PREVIEW;
+	els.tabs.replaceChildren(
+		...labels.map((label) => {
+			const b = document.createElement('button');
+			b.className = `tab${label === tab ? ' active' : ''}`;
+			b.setAttribute('role', 'tab');
+			b.setAttribute('aria-selected', String(label === tab));
+			b.textContent = label;
+			b.addEventListener('click', () => {
+				tab = label;
+				renderTabs();
+				renderView();
+			});
+			return b;
+		}),
+	);
+}
+
+function renderPages() {
 	if (!doc) return;
-	const out = output('preview');
-	viewer.show(tab === 'css' ? out.css : tab === 'markup' ? out.markup : out.full, tab === 'css' ? 'css' : 'html');
+	els.page.hidden = doc.pages.length < 2;
+	els.page.replaceChildren(
+		...doc.pages.map((p, i) => {
+			const o = document.createElement('option');
+			o.value = String(i);
+			o.textContent = p.slug === 'index' ? `${p.name} (index)` : p.name;
+			return o;
+		}),
+	);
+	els.page.value = String(page);
+}
+
+function renderDevices() {
+	for (const b of els.devices.querySelectorAll<HTMLButtonElement>('button'))
+		b.classList.toggle('active', Number(b.dataset.width) === deviceWidth);
+	els.frame.style.width = deviceWidth ? `${deviceWidth}px` : '100%';
+}
+
+function renderView() {
+	if (!doc) return;
+	const isPreview = tab === PREVIEW;
+	els.preview.hidden = !isPreview;
+	els.editor.hidden = isPreview;
+	els.devices.hidden = !isPreview;
+	if (isPreview) {
+		const key = `${page}|${settings.inlineSvg}|${files.length}|${doc.title}|${JSON.stringify(settings)}`;
+		if (key !== previewKey) {
+			previewKey = key;
+			els.frame.srcdoc = previewDocument(doc, page, assets, settings.inlineSvg);
+		}
+		renderDevices();
+		return;
+	}
+	const file = pageFiles(files).find((f) => f.label === tab);
+	if (file) viewer.show(file.content, file.lang);
 }
 
 function renderNotes(warnings: IRWarning[]) {
@@ -147,26 +266,42 @@ function renderNotes(warnings: IRWarning[]) {
 	);
 }
 
+function setMenuState() {
+	for (const b of els.menu.querySelectorAll<HTMLButtonElement>('button[data-dl]')) {
+		if (b.dataset.dl === 'tokens') continue;
+		b.disabled = !doc || (b.dataset.dl === 'starter' && settings.format === 'email');
+	}
+}
+
 function renderAll() {
 	if (!result) return;
-	doc = buildDocument(result, { decimals: settings.decimals, useVariables: settings.useVariables });
-	renderViewer();
+	doc = buildDocument(result, {
+		decimals: settings.decimals,
+		useVariables: settings.useVariables,
+		units: settings.units,
+		shareClasses: settings.shareClasses,
+	});
+	page = Math.min(page, doc.pages.length - 1);
+	files = output('preview');
+	renderPages();
+	renderTabs();
+	renderView();
 	renderNotes(doc.warnings);
+	setMenuState();
 	els.empty.hidden = true;
 	els.copy.disabled = false;
-	els.zip.disabled = false;
 
 	const bytes = assetBytes();
-	const heavy = bytes > ZIP_RECOMMEND_BYTES || assets.size > ZIP_RECOMMEND_COUNT;
-	els.zip.classList.toggle('primary', heavy);
+	const heavy = settings.inlineImages && (bytes > ZIP_RECOMMEND_BYTES || assets.size > ZIP_RECOMMEND_COUNT);
+	els.download.classList.toggle('primary', heavy);
 	els.banner.hidden = !heavy;
 	if (heavy) {
 		els.banner.textContent = `This export includes ${assets.size} images (${formatBytes(bytes)}). Download the .zip for separate asset files — copying embeds them all as base64.`;
 	}
-	els.status.textContent = `${result.nodeCount} layers · ${assets.size} assets (${formatBytes(bytes)}) · read in ${result.ms} ms`;
+	const pages = doc.pages.length > 1 ? ` · ${doc.pages.length} pages` : '';
+	const breakpoints = doc.media.length ? ` · ${doc.media.length} breakpoints` : '';
+	els.status.textContent = `${result.nodeCount} layers${pages}${breakpoints} · ${assets.size} assets (${formatBytes(bytes)}) · read in ${result.ms} ms`;
 }
-
-let selectionNames: string[] = [];
 
 function updateSelection(ids: string[], names: string[]) {
 	selectionIds = ids;
@@ -183,26 +318,61 @@ function updateSelection(ids: string[], names: string[]) {
 	else els.selection.removeAttribute('title');
 }
 
-function generate() {
+function generateNow() {
 	if (busy || selectionIds.length === 0) return;
 	busy = true;
 	els.generate.disabled = true;
 	els.status.textContent = 'Reading layers…';
-	send({ type: 'GENERATE' });
+	send({ type: 'GENERATE', options: { rasterScale: settings.rasterScale, assetBytes: true } });
 }
 
 function applySettingsToForm() {
+	els.format.value = settings.format;
+	els.units.value = settings.units;
 	els.decimals.value = String(settings.decimals);
+	els.scale.value = String(settings.rasterScale);
 	els.vars.checked = settings.useVariables;
+	els.share.checked = settings.shareClasses;
+	els.fonts.checked = settings.googleFonts;
+	els.svg.checked = settings.inlineSvg;
 	els.inline.checked = settings.inlineImages;
 }
 
-function saveSettings(rerender: boolean) {
+function update(patch: Partial<Settings>, rerender = true) {
+	settings = { ...settings, ...patch };
 	send({ type: 'SAVE_SETTINGS', settings });
 	if (rerender) renderAll();
+	setMenuState();
 }
 
-window.onmessage = (event: MessageEvent) => {
+function downloadTokens(tokens: TokensResult) {
+	const count =
+		tokens.collections.reduce((n, c) => n + c.variables.length, 0) +
+		tokens.paintStyles.length +
+		tokens.textStyles.length +
+		tokens.effectStyles.length;
+	if (count === 0) {
+		notify('This file has no local variables or styles');
+		return;
+	}
+	downloadZip('design-tokens.zip', {
+		'tokens.css': tokensToCss(tokens, { units: settings.units, decimals: settings.decimals }),
+		'tokens.json': tokensToJson(tokens),
+	});
+	notify(`Downloaded design-tokens.zip (${count} tokens)`);
+}
+
+window.addEventListener('message', (event: MessageEvent) => {
+	const nav = event.data?.previewNav as string | undefined;
+	if (nav && doc) {
+		const slug = nav.replace(/^\.?\//, '').split(/[#?]/)[0].replace(/\.html$/, '') || 'index';
+		const index = doc.pages.findIndex((p) => p.slug === slug);
+		if (index >= 0) {
+			page = index;
+			renderAll();
+		} else if (/^https?:/.test(nav)) notify(`Link: ${nav}`);
+		return;
+	}
 	const msg = event.data?.pluginMessage as MainToUi | undefined;
 	if (!msg) return;
 	switch (msg.type) {
@@ -222,9 +392,14 @@ window.onmessage = (event: MessageEvent) => {
 			assets = new Map(msg.result.assets.map((a) => [a.id, a]));
 			generatedIds = [...selectionIds];
 			focusedId = null;
+			previewKey = '';
+			page = 0;
 			els.generate.textContent = 'Regenerate';
 			updateSelection(selectionIds, selectionNames);
 			renderAll();
+			return;
+		case 'TOKENS':
+			downloadTokens(msg.tokens);
 			return;
 		case 'ERROR':
 			busy = false;
@@ -232,65 +407,93 @@ window.onmessage = (event: MessageEvent) => {
 			els.status.textContent = msg.message;
 			return;
 	}
-};
+});
 
-els.generate.addEventListener('click', generate);
+els.generate.addEventListener('click', generateNow);
 document.addEventListener('keydown', (e) => {
 	if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
 		e.preventDefault();
-		generate();
+		generateNow();
 	}
+	if (e.key === 'Escape') closeMenu();
 });
 
-tabs.forEach((button) =>
-	button.addEventListener('click', () => {
-		tab = button.dataset.tab as Tab;
-		tabs.forEach((b) => b.classList.toggle('active', b === button));
-		renderViewer();
-	}),
-);
+els.format.addEventListener('change', () => update({ format: els.format.value as Format }));
+els.page.addEventListener('change', () => {
+	page = Number(els.page.value);
+	renderTabs();
+	renderView();
+});
+els.devices.addEventListener('click', (e) => {
+	const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-width]');
+	if (!b) return;
+	deviceWidth = Number(b.dataset.width);
+	renderDevices();
+});
 
 els.copy.addEventListener('click', () => {
 	if (!doc) return;
-	const out = output(settings.inlineImages ? 'inline' : 'files');
-	const text = tab === 'css' ? out.css : tab === 'markup' ? out.markup : out.full;
-	const ok = copyText(text);
-	send({
-		type: 'NOTIFY',
-		message: ok
-			? `Copied ${tab === 'css' ? 'CSS' : 'HTML'} (${formatBytes(text.length)})`
-			: 'Copy failed — select the code and press Ctrl/⌘ + C',
-	});
+	const list = pageFiles(output(settings.inlineImages ? 'inline' : 'files'));
+	const file = list.find((f) => f.label === tab) ?? list[0];
+	if (!file) return;
+	const ok = copyText(file.content);
+	notify(ok ? `Copied ${file.label} (${formatBytes(file.content.length)})` : 'Copy failed — select the code and press Ctrl/⌘ + C');
 });
 
-els.zip.addEventListener('click', () => {
+function closeMenu() {
+	els.menu.hidden = true;
+	els.download.setAttribute('aria-expanded', 'false');
+}
+
+els.download.addEventListener('click', (e) => {
+	e.stopPropagation();
+	els.menu.hidden = !els.menu.hidden;
+	els.download.setAttribute('aria-expanded', String(!els.menu.hidden));
+});
+document.addEventListener('click', (e) => {
+	if (!els.menu.hidden && !els.menu.contains(e.target as Node)) closeMenu();
+});
+
+els.menu.addEventListener('click', (e) => {
+	const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-dl]');
+	if (!b || b.disabled) return;
+	closeMenu();
+	const kind = b.dataset.dl;
+	if (kind === 'tokens') {
+		els.status.textContent = 'Reading variables and styles…';
+		send({ type: 'TOKENS' });
+		return;
+	}
 	if (!doc || !result) return;
-	const out = output('files');
-	const base =
-		(result.roots[0]?.name ?? 'export')
-			.toLowerCase()
-			.replace(/[^a-z0-9]+/g, '-')
-			.replace(/^-+|-+$/g, '') || 'export';
-	downloadZip(`${base}.zip`, { html: out.full, css: out.css, assets: [...assets.values()] });
-	send({ type: 'NOTIFY', message: `Downloaded ${base}.zip` });
+	if (kind === 'zip') {
+		const entries: Record<string, string | Uint8Array> = {};
+		for (const f of output('files')) if (f.path) entries[f.path] = f.content;
+		const dir = formatParts(settings.format).framework === 'html' || settings.format === 'email' ? 'assets' : 'public/assets';
+		for (const a of assets.values()) entries[`${dir}/${a.name}`] = a.bytes;
+		downloadZip(`${baseName()}.zip`, entries);
+		notify(`Downloaded ${baseName()}.zip`);
+	} else if (kind === 'starter') {
+		const entries = starterFiles(doc, assets, { format: settings.format, googleFonts: settings.googleFonts, inlineSvg: settings.inlineSvg });
+		downloadZip(`${baseName()}-starter.zip`, entries);
+		notify(`Downloaded ${baseName()}-starter.zip — run npm install && npm run dev`);
+	}
 });
 
 els.settingsToggle.addEventListener('click', () => {
 	els.settings.hidden = !els.settings.hidden;
 	els.settingsToggle.setAttribute('aria-expanded', String(!els.settings.hidden));
 });
-els.decimals.addEventListener('change', () => {
-	settings = { ...settings, decimals: Number(els.decimals.value) as Settings['decimals'] };
-	saveSettings(true);
+els.units.addEventListener('change', () => update({ units: els.units.value as Settings['units'] }));
+els.decimals.addEventListener('change', () => update({ decimals: Number(els.decimals.value) as Settings['decimals'] }));
+els.scale.addEventListener('change', () => {
+	update({ rasterScale: Number(els.scale.value) as Settings['rasterScale'] }, false);
+	if (result) els.status.textContent = 'Raster scale applies on the next Generate';
 });
-els.vars.addEventListener('change', () => {
-	settings = { ...settings, useVariables: els.vars.checked };
-	saveSettings(true);
-});
-els.inline.addEventListener('change', () => {
-	settings = { ...settings, inlineImages: els.inline.checked };
-	saveSettings(false);
-});
+els.vars.addEventListener('change', () => update({ useVariables: els.vars.checked }));
+els.share.addEventListener('change', () => update({ shareClasses: els.share.checked }));
+els.fonts.addEventListener('change', () => update({ googleFonts: els.fonts.checked }));
+els.svg.addEventListener('change', () => update({ inlineSvg: els.svg.checked }));
+els.inline.addEventListener('change', () => update({ inlineImages: els.inline.checked }));
 els.wrap.addEventListener('change', () => viewer.setWrap(els.wrap.checked));
 
 els.notesToggle.addEventListener('click', () => {

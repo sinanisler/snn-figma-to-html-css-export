@@ -4,7 +4,16 @@
 	"api": "1.0.0",
 	"main": "src/main/main.ts",
 	"ui": "src/ui/ui.ts",
-	"editorType": ["figma"],
+	"editorType": ["figma", "dev"],
+	"capabilities": ["codegen", "inspect"],
+	"codegenLanguages": [
+		{ "label": "HTML + CSS", "value": "html" },
+		{ "label": "HTML + Tailwind", "value": "tailwind" },
+		{ "label": "React + CSS", "value": "react" },
+		{ "label": "React + Tailwind", "value": "react-tailwind" },
+		{ "label": "Vue + CSS", "value": "vue" },
+		{ "label": "Svelte + CSS", "value": "svelte" }
+	],
 	"documentAccess": "dynamic-page",
 	"networkAccess": {
 		"allowedDomains": ["none"]

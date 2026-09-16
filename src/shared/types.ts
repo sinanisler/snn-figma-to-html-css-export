@@ -121,8 +121,20 @@ export type RawNode = {
 	text?: RawText;
 	/** Set when the node is exported as a single asset (SVG vector or raster image). */
 	exportAsset?: string;
+	/** Prototype click action: an external URL or another node. */
+	link?: RawLink;
+	/** Instances: the component (or component set) they come from. */
+	component?: { id: string; name: string };
+	/** Instances of a variant with State=Default: the Hover/Focus/Pressed siblings. */
+	states?: RawState[];
+	/** Roots only: the node sits directly on the page. */
+	topLevel?: boolean;
 	children: RawNode[];
 };
+
+export type RawLink = { url?: string; nodeId?: string; newTab?: boolean };
+export type PseudoState = 'hover' | 'focus' | 'active';
+export type RawState = { state: PseudoState; node: RawNode };
 
 export type VariableMeta = { name: string; collection: string };
 
@@ -145,23 +157,89 @@ export type ReadResult = {
 	ms: number;
 };
 
+export type Format =
+	| 'html'
+	| 'tailwind'
+	| 'react'
+	| 'react-tailwind'
+	| 'vue'
+	| 'vue-tailwind'
+	| 'svelte'
+	| 'email';
+
 export type Settings = {
+	format: Format;
 	decimals: 0 | 1 | 2;
+	units: 'px' | 'rem';
 	useVariables: boolean;
 	inlineImages: boolean;
+	googleFonts: boolean;
+	shareClasses: boolean;
+	inlineSvg: boolean;
+	rasterScale: 1 | 2 | 3;
 };
 
-export const DEFAULT_SETTINGS: Settings = { decimals: 0, useVariables: true, inlineImages: true };
+export const DEFAULT_SETTINGS: Settings = {
+	format: 'html',
+	decimals: 0,
+	units: 'px',
+	useVariables: true,
+	inlineImages: true,
+	googleFonts: true,
+	shareClasses: true,
+	inlineSvg: false,
+	rasterScale: 2,
+};
+
+export type ReadOptions = {
+	rasterScale: number;
+	/** false skips image bytes (Dev Mode codegen only needs file names). */
+	assetBytes: boolean;
+};
+
+// ---------- design tokens ----------
+
+export type TokenValue = string | number | boolean | RGBA | { alias: string };
+
+export type TokenVariable = {
+	id: string;
+	name: string;
+	type: 'COLOR' | 'FLOAT' | 'STRING' | 'BOOLEAN';
+	values: Record<string, TokenValue>;
+};
+
+export type TokenCollection = { name: string; modes: { id: string; name: string }[]; variables: TokenVariable[] };
+
+export type TokenTextStyle = {
+	name: string;
+	fontFamily: string;
+	fontWeight: number;
+	italic: boolean;
+	fontSize: number;
+	lineHeight: { unit: 'PIXELS' | 'PERCENT' | 'AUTO'; value: number };
+	letterSpacing: { unit: 'PIXELS' | 'PERCENT'; value: number };
+	textCase: string;
+	decoration: string;
+};
+
+export type TokensResult = {
+	collections: TokenCollection[];
+	paintStyles: { name: string; paints: RawPaint[] }[];
+	textStyles: TokenTextStyle[];
+	effectStyles: { name: string; effects: RawEffect[] }[];
+};
 
 export type MainToUi =
 	| { type: 'INIT'; settings: Settings; size: { w: number; h: number } }
 	| { type: 'SELECTION'; ids: string[]; names: string[] }
 	| { type: 'PROGRESS'; done: number; total: number }
 	| { type: 'RESULT'; result: ReadResult }
+	| { type: 'TOKENS'; tokens: TokensResult }
 	| { type: 'ERROR'; message: string };
 
 export type UiToMain =
-	| { type: 'GENERATE' }
+	| { type: 'GENERATE'; options: ReadOptions }
+	| { type: 'TOKENS' }
 	| { type: 'FOCUS'; nodeId: string }
 	| { type: 'RESIZE'; w: number; h: number }
 	| { type: 'SAVE_SETTINGS'; settings: Settings }

@@ -1,11 +1,17 @@
 import type { RawAutoLayout, RawNode, ReadResult } from '../shared/types';
+import { mergeBreakpoint, mergeState, type MergeCtx } from './diff';
 import { effectStyle, strokeStyle } from './effects';
-import { cssColor, num, px, slugify, type Style, type StyleCtx } from './format';
-import type { FontUse, IRDocument, IRNode, IRVariable, IRWarning } from './ir';
+import { isCommercial } from './fonts';
+import { cssColor, cssSlug, num, px, slugify, type Style, type StyleCtx, type Units } from './format';
+import { primaryClass, walk, type FontUse, type IRDocument, type IRNode, type IRPage, type IRRule, type IRVariable, type IRWarning } from './ir';
 import { backgroundStyle, imageElementStyle } from './paint';
+import { shareClasses } from './share';
 import { buildText } from './text';
 
-export type BuildOptions = { decimals: number; useVariables: boolean };
+export type BuildOptions = { decimals: number; useVariables: boolean; units?: Units; shareClasses?: boolean };
+
+/** real: registers classes · dry: temporary tree for diffing · silent: dry without warnings */
+type Mode = 'real' | 'dry' | 'silent';
 
 const BLEND: Record<string, string> = {
 	DARKEN: 'darken',
@@ -26,7 +32,15 @@ const BLEND: Record<string, string> = {
 	LUMINOSITY: 'luminosity',
 };
 
+const CONTROL_TAGS = new Set(['input', 'textarea', 'select']);
+
 const TAG_RULES: [RegExp, string][] = [
+	[/\b(textarea|text area|message field|message box)\b/, 'textarea'],
+	[/\b(input|text field|textfield|search field|search bar|search box|email field|password field)\b/, 'input'],
+	[/\b(select|dropdown|drop down|combobox)\b/, 'select'],
+	[/\bform\b/, 'form'],
+	[/\b(ol|ordered list)\b/, 'ol'],
+	[/\b(ul|list|links|menu items|nav items)\b/, 'ul'],
 	[/\b(header|topbar|top bar)\b/, 'header'],
 	[/\bfooter\b/, 'footer'],
 	[/\b(nav|navbar|navigation)\b/, 'nav'],
@@ -34,43 +48,98 @@ const TAG_RULES: [RegExp, string][] = [
 	[/\bsection\b/, 'section'],
 	[/\b(aside|sidebar)\b/, 'aside'],
 	[/\barticle\b/, 'article'],
+	[/\bfigure\b/, 'figure'],
 	[/\b(button|btn|cta)\b/, 'button'],
 	[/\blink\b/, 'a'],
 ];
 
-const WEB_SAFE_FONTS = new Set([
-	'arial',
-	'helvetica',
-	'helvetica neue',
-	'georgia',
-	'times',
-	'times new roman',
-	'verdana',
-	'tahoma',
-	'trebuchet ms',
-	'courier',
-	'courier new',
-	'system-ui',
-]);
+const INPUT_TYPES: [RegExp, string][] = [
+	[/email/, 'email'],
+	[/password/, 'password'],
+	[/search/, 'search'],
+	[/\b(phone|tel)\b/, 'tel'],
+	[/\b(number|qty|quantity)\b/, 'number'],
+	[/\b(url|website)\b/, 'url'],
+];
+
+const CONTROL_TEXT_KEYS = [
+	'font-family',
+	'font-size',
+	'font-weight',
+	'font-style',
+	'line-height',
+	'letter-spacing',
+	'text-transform',
+	'text-align',
+	'color',
+];
+
+const PSEUDO = { hover: ':hover', focus: ':focus-visible', active: ':active' } as const;
 
 const ALIGN_ITEMS = { MIN: 'flex-start', CENTER: 'center', MAX: 'flex-end', BASELINE: 'baseline' } as const;
 const JUSTIFY = { MIN: '', CENTER: 'center', MAX: 'flex-end', SPACE_BETWEEN: 'space-between' } as const;
 const SELF_ALIGN: Record<string, string> = { MIN: 'start', CENTER: 'center', MAX: 'end' };
 
-const cssSlug = (s: string) =>
-	s
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-+|-+$/g, '') || 'var';
+const PAGE_TYPES = new Set(['FRAME', 'COMPONENT', 'INSTANCE']);
+const BP_WORDS = 'desktop|laptop|tablet|ipad|mobile|phone|iphone|android';
+const BP_SUFFIX = new RegExp(`[\\s/|:@(\\[_–—-]+(${BP_WORDS}|\\d{3,4}\\s*px)[\\])]?\\s*$`, 'i');
+const BP_PREFIX = new RegExp(`^\\s*(${BP_WORDS}|\\d{3,4}\\s*px)[\\s/|:@_–—-]+`, 'i');
+const BP_BOUNDS = [768, 1024, 1280, 1440, 1920];
+
+/** Page name without a breakpoint marker: "Home / Mobile" → "Home". */
+export function pageKey(name: string): string {
+	const t = name.trim();
+	return t.replace(BP_SUFFIX, '').replace(BP_PREFIX, '').trim() || t;
+}
+
+/** max-width for a frame of width `small` next to a larger frame: snaps to common device boundaries. */
+export function breakpointFor(small: number, large: number): number {
+	const bound = BP_BOUNDS.find((b) => b > small) ?? Math.ceil(small) + 1;
+	return Math.min(Math.floor(large) - 1, bound - 1);
+}
+
+type Group = { key: string; frames: RawNode[] };
+
+/** Several top-level frames become a site: one page per name, frames sharing a name become breakpoints. */
+function groupPages(roots: RawNode[]): Group[] | null {
+	if (roots.length < 2 || !roots.every((r) => r.topLevel && PAGE_TYPES.has(r.type))) return null;
+	const map = new Map<string, RawNode[]>();
+	for (const r of roots) {
+		const key = pageKey(r.name).toLowerCase();
+		map.set(key, [...(map.get(key) ?? []), r]);
+	}
+	const groups: Group[] = [];
+	for (const list of map.values()) {
+		const sorted = [...list].sort((a, b) => b.width - a.width);
+		const widths = new Set<number>();
+		const frames: RawNode[] = [];
+		const extra: RawNode[] = [];
+		for (const f of sorted) {
+			const w = Math.round(f.width);
+			if (widths.has(w)) extra.push(f);
+			else {
+				widths.add(w);
+				frames.push(f);
+			}
+		}
+		groups.push({ key: pageKey(frames[0].name), frames });
+		for (const e of extra) groups.push({ key: e.name, frames: [e] });
+	}
+	return groups;
+}
 
 export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocument {
+	const units = opts.units ?? 'px';
 	const classes = new Set<string>();
 	const counters = new Map<string, number>();
 	const vars = new Map<string, IRVariable>();
 	const varNames = new Set<string>();
 	const warnings: IRWarning[] = [];
 	const warnKeys = new Set<string>();
-	const fonts = new Map<string, { weights: Set<number>; nodeId: string; nodeName: string }>();
+	const fonts = new Map<string, { weights: Set<number>; italic: Set<number>; nodeId: string; nodeName: string }>();
+	const rules: IRRule[] = [];
+	const irById = new Map<string, IRNode>();
+	const svgAssets = new Set(result.assets.filter((a) => a.ext === 'svg').map((a) => a.id));
 
 	const addWarning = (nodeId: string, nodeName: string, code: string, detail?: string) => {
 		const key = `${code}|${nodeId}|${detail ?? ''}`;
@@ -79,6 +148,8 @@ export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocumen
 		warnings.push({ nodeId, nodeName, code, detail });
 	};
 	for (const w of result.warnings) addWarning(w.nodeId, w.nodeName, w.code, w.detail);
+
+	const length = (n: number) => px(n, opts.decimals, units);
 
 	const variableRef = (id: string, literal: string, raw: RawNode): string => {
 		const meta = result.variables[id];
@@ -97,22 +168,27 @@ export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocumen
 		return `var(${name})`;
 	};
 
-	const makeCtx = (raw: RawNode): StyleCtx => ({
-		px: (n) => px(n, opts.decimals),
-		len: (n, varId) => (varId ? variableRef(varId, px(n, opts.decimals), raw) : px(n, opts.decimals)),
+	const makeCtx = (raw: RawNode, mode: Mode): StyleCtx => ({
+		px: length,
+		len: (n, varId) => (varId ? variableRef(varId, length(n), raw) : length(n)),
 		color: (c, varId) => (varId ? variableRef(varId, cssColor(c), raw) : cssColor(c)),
 		asset: (id) => `__ASSET__${id}__`,
-		warn: (code, detail) => addWarning(raw.id, raw.name, code, detail),
+		warn: (code, detail) => {
+			if (mode !== 'silent') addWarning(raw.id, raw.name, code, detail);
+		},
 	});
 
-	const className = (raw: RawNode, tag: string): string => {
-		let base = slugify(raw.name);
-		if (base && raw.type === 'TEXT') base = base.split('-').slice(0, 4).join('-');
-		if (!base) {
-			const prefix = raw.type === 'TEXT' ? 'text' : tag === 'img' ? 'img' : 'box';
-			const n = (counters.get(prefix) ?? 0) + 1;
-			counters.set(prefix, n);
-			base = `${prefix}-${n}`;
+	const claim = (base: string): string => {
+		if (base.endsWith('-?')) {
+			const prefix = base.slice(0, -2);
+			let name: string;
+			do {
+				const n = (counters.get(prefix) ?? 0) + 1;
+				counters.set(prefix, n);
+				name = `${prefix}-${n}`;
+			} while (classes.has(name));
+			classes.add(name);
+			return name;
 		}
 		let name = base;
 		for (let i = 2; classes.has(name); i++) name = `${base}-${i}`;
@@ -120,18 +196,35 @@ export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocumen
 		return name;
 	};
 
-	const onFont = (raw: RawNode) => (family: string, weight: number) => {
-		const entry = fonts.get(family) ?? { weights: new Set<number>(), nodeId: raw.id, nodeName: raw.name };
-		entry.weights.add(weight);
+	const classBase = (raw: RawNode, tag: string): string => {
+		let base = slugify(raw.name);
+		if (base && raw.type === 'TEXT') base = base.split('-').slice(0, 4).join('-');
+		if (base) return base;
+		return `${raw.type === 'TEXT' ? 'text' : tag === 'img' ? 'img' : 'box'}-?`;
+	};
+
+	/** Gives a dry-built subtree real class names (used for layers that only exist at a smaller breakpoint). */
+	const realize = (root: IRNode) =>
+		walk([root], (n) => {
+			irById.set(n.id, n);
+			if (!n.className) return;
+			const old = n.className;
+			n.className = claim(old);
+			for (const r of n.runs ?? []) if (r.className?.startsWith(`${old}-span-`)) r.className = n.className + r.className.slice(old.length);
+		});
+
+	const onFont = (raw: RawNode) => (family: string, weight: number, italic: boolean) => {
+		const entry = fonts.get(family) ?? { weights: new Set<number>(), italic: new Set<number>(), nodeId: raw.id, nodeName: raw.name };
+		(italic ? entry.italic : entry.weights).add(weight);
 		fonts.set(family, entry);
 	};
 
-	const buildNode = (raw: RawNode, parent: RawNode | null, interactive: boolean): IRNode | null => {
+	const buildNode = (raw: RawNode, parent: RawNode | null, parentTag: string, interactive: boolean, mode: Mode): IRNode | null => {
+		const ctx = makeCtx(raw, mode);
 		if (raw.isMask) {
-			addWarning(raw.id, raw.name, 'MASK_SKIPPED');
+			ctx.warn('MASK_SKIPPED');
 			return null;
 		}
-		const ctx = makeCtx(raw);
 		const attrs: Record<string, string> = {};
 		const alt = slugify(raw.name) ? raw.name : '';
 		const leafShape = (raw.type === 'RECTANGLE' || raw.type === 'ELLIPSE') && raw.children.length === 0;
@@ -148,12 +241,14 @@ export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocumen
 			attrs.src = ctx.asset(image.assetId);
 			attrs.alt = alt;
 		} else if (raw.type === 'TEXT') {
-			tag = textTag(raw, interactive);
+			tag = textTag(raw, interactive, parentTag);
 		} else {
-			tag = containerTag(raw, interactive);
+			tag = containerTag(raw, interactive, parentTag);
 		}
+		const control = CONTROL_TAGS.has(tag);
 
-		const cls = className(raw, tag);
+		const base = classBase(raw, tag);
+		const cls = mode === 'real' ? claim(base) : base;
 		const style: Style = {};
 		Object.assign(style, layoutStyle(raw, parent, ctx));
 		if (raw.autoLayout) Object.assign(style, containerStyle(raw, raw.autoLayout, ctx));
@@ -191,71 +286,229 @@ export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocumen
 			}
 		}
 
+		let placeholderColor: string | undefined;
+		if (control) {
+			const textRaw = firstText(raw);
+			const label = textRaw?.text?.segments.map((s) => s.text).join('') ?? '';
+			if (textRaw) {
+				const t = buildNode(textRaw, null, 'p', false, 'silent');
+				for (const k of CONTROL_TEXT_KEYS) if (t?.style[k]) style[k] = t.style[k];
+				placeholderColor = t?.style.color;
+			}
+			if (tag === 'select') {
+				style.appearance = 'none';
+				runs = [{ text: label, style: {} }];
+			} else {
+				if (tag === 'input') attrs.type = INPUT_TYPES.find(([re]) => re.test(words(raw.name)))?.[1] ?? 'text';
+				attrs.placeholder = label;
+			}
+			ctx.warn('FORM_CONTROL_SIMPLIFIED');
+		}
+
+		const link = raw.link;
+		const linkable = tag !== 'img' && !control && !interactive;
 		if (raw.type === 'TEXT' && textHref && !interactive) {
 			tag = 'a';
 			attrs.href = textHref;
 			runs = runs?.map((r) => ({ ...r, href: undefined }));
-		} else if (tag === 'a') {
-			attrs.href = '#';
-			ctx.warn('PLACEHOLDER_HREF');
+		} else if (link && linkable) {
+			tag = 'a';
 		}
+		let linkNodeId: string | undefined;
+		if (tag === 'a' && !attrs.href) {
+			if (link?.url) {
+				attrs.href = link.url;
+				if (link.newTab) {
+					attrs.target = '_blank';
+					attrs.rel = 'noopener';
+				}
+			} else if (link?.nodeId) {
+				linkNodeId = link.nodeId;
+			} else {
+				attrs.href = '#';
+				ctx.warn('PLACEHOLDER_HREF');
+			}
+		}
+		if (tag === 'a' && raw.type !== 'TEXT' && !style.display) style.display = 'block';
 		if (tag === 'button') attrs.type = 'button';
 
-		const node: IRNode = { id: raw.id, name: raw.name, tag, className: cls, style, attrs, children: [] };
+		const node: IRNode = { id: raw.id, name: raw.name, tag, className: cls, shared: [], style, attrs, children: [] };
 		if (runs) {
 			node.runs = runs;
 			node.wrapRuns = wrapRuns;
 		}
+		if (raw.exportAsset && svgAssets.has(raw.exportAsset)) node.svgAsset = raw.exportAsset;
+		if (linkNodeId) node.linkNodeId = linkNodeId;
+		if (raw.component) {
+			node.componentKey = raw.component.id;
+			node.componentName = raw.component.name;
+		}
+		if (raw.text?.styleName) node.textStyle = raw.text.styleName;
+		if (mode === 'real') {
+			irById.set(raw.id, node);
+			if (placeholderColor) rules.push({ target: node, pseudo: '::placeholder', style: { color: placeholderColor, opacity: '1' } });
+		}
+		if (control) return node;
 
 		const childInteractive = interactive || tag === 'button' || tag === 'a';
+		const list = tag === 'ul' || tag === 'ol';
 		for (const child of raw.children) {
-			const ir = buildNode(child, raw, childInteractive);
+			const ir = buildNode(child, raw, tag, childInteractive, mode);
 			if (!ir) continue;
-			node.children.push(ir);
 			if (ir.style.position === 'absolute' && !style.position) style.position = 'relative';
+			if (list && ir.tag !== 'li') {
+				node.children.push({
+					id: `${ir.id}:li`,
+					name: ir.name,
+					tag: 'li',
+					className: '',
+					shared: [],
+					style: { display: 'contents' },
+					attrs: {},
+					wrapper: true,
+					children: [ir],
+				});
+			} else node.children.push(ir);
+		}
+
+		if (mode === 'real' && raw.states) {
+			for (const s of raw.states) {
+				const tree = buildNode(s.node, null, parentTag, interactive, 'silent');
+				if (tree) mergeState(node, tree, PSEUDO[s.state], rules);
+			}
 		}
 		return node;
 	};
 
-	const roots = result.roots.map((r) => buildNode(r, null, false)).filter((n): n is IRNode => n !== null);
+	const fluidRoot = (node: IRNode, raw: RawNode) => {
+		node.style.width = '100%';
+		delete node.style.height;
+		if (raw.height > 0) node.style['min-height'] = length(raw.height);
+	};
+
+	const pages: IRPage[] = [];
+	const media: { query: string; width: number }[] = [];
+	const rootPage = new Map<string, number>();
+	const slugs = new Set<string>();
+	const groups = groupPages(result.roots);
+
+	if (!groups) {
+		const roots = result.roots.map((r) => buildNode(r, null, 'body', false, 'real')).filter((n): n is IRNode => n !== null);
+		const title = result.roots[0]?.name ?? 'Export';
+		pages.push({ name: title, slug: 'index', title, roots });
+	} else {
+		groups.forEach((group, pageIndex) => {
+			const [baseRaw, ...others] = group.frames;
+			const root = buildNode(baseRaw, null, 'body', false, 'real');
+			rootPage.set(baseRaw.id, pageIndex);
+			if (!root) return;
+			const effective = new Map<IRNode, Style>();
+			if (others.length) fluidRoot(root, baseRaw);
+			const ctx: MergeCtx = {
+				rules,
+				effective,
+				realize,
+				warn: (n, code) => addWarning(n.id, n.name, code),
+			};
+			others.forEach((raw, i) => {
+				rootPage.set(raw.id, pageIndex);
+				const tree = buildNode(raw, null, 'body', false, 'dry');
+				if (!tree) return;
+				fluidRoot(tree, raw);
+				const width = breakpointFor(raw.width, group.frames[i].width);
+				const query = `(max-width: ${width}px)`;
+				if (!media.some((m) => m.query === query)) media.push({ query, width });
+				mergeBreakpoint(root, tree, query, ctx);
+			});
+			let slug = pages.length === 0 ? 'index' : cssSlug(group.key, 'page');
+			for (let i = 2; slugs.has(slug); i++) slug = `${cssSlug(group.key, 'page')}-${i}`;
+			slugs.add(slug);
+			pages.push({ name: group.key, slug, title: group.key, roots: [root] });
+		});
+	}
+
+	// Resolve prototype links now that every page and element exists.
+	const pageOf = new Map<IRNode, number>();
+	pages.forEach((p, i) => walk(p.roots, (n) => pageOf.set(n, i)));
+	const ids = new Set<string>();
+	pages.forEach((p) =>
+		walk(p.roots, (n) => {
+			const id = n.linkNodeId;
+			if (!id) return;
+			delete n.linkNodeId;
+			const page = groups ? rootPage.get(id) : undefined;
+			const target = irById.get(id);
+			if (page !== undefined) n.link = { page };
+			else if (target && pageOf.has(target)) {
+				if (!target.attrs.id) {
+					let anchor = primaryClass(target) || 'section';
+					for (let i = 2; ids.has(anchor); i++) anchor = `${primaryClass(target)}-${i}`;
+					ids.add(anchor);
+					target.attrs.id = anchor;
+				}
+				n.link = { page: pageOf.get(target)!, anchor: target };
+			} else {
+				n.link = { unresolved: true };
+				addWarning(n.id, n.name, 'LINK_TARGET_OUTSIDE');
+			}
+		}),
+	);
 
 	const fontList: FontUse[] = [];
 	for (const [family, use] of fonts) {
-		fontList.push({ family, weights: [...use.weights].sort((a, b) => a - b) });
-		if (!WEB_SAFE_FONTS.has(family.toLowerCase()))
-			addWarning(use.nodeId, use.nodeName, 'CUSTOM_FONT_NOT_EMBEDDED', family);
+		const sort = (s: Set<number>) => [...s].sort((a, b) => a - b);
+		fontList.push({ family, weights: sort(use.weights), italicWeights: sort(use.italic) });
+		if (isCommercial(family)) addWarning(use.nodeId, use.nodeName, 'CUSTOM_FONT_NOT_EMBEDDED', family);
 	}
 
-	return {
-		title: result.roots[0]?.name ?? 'Export',
-		roots,
+	const doc: IRDocument = {
+		title: pages[0]?.title ?? 'Export',
+		pages,
+		rules,
+		sharedClasses: [],
+		media: media.sort((a, b) => b.width - a.width).map((m) => m.query),
 		variables: [...vars.values()],
 		fonts: fontList,
 		warnings,
 	};
+	if (opts.shareClasses) shareClasses(doc);
+	return doc;
+}
+
+function firstText(raw: RawNode): RawNode | undefined {
+	for (const c of raw.children) {
+		if (c.type === 'TEXT') return c;
+		const found = firstText(c);
+		if (found) return found;
+	}
+	return undefined;
 }
 
 function words(name: string): string {
 	return name.toLowerCase().replace(/[^a-z0-9]+/g, ' ');
 }
 
-function containerTag(raw: RawNode, interactive: boolean): string {
+function containerTag(raw: RawNode, interactive: boolean, parentTag: string): string {
 	if (raw.type === 'SECTION') return 'section';
 	const w = words(raw.name);
+	if ((parentTag === 'ul' || parentTag === 'ol') && /\b(li|list item|item)\b/.test(w)) return 'li';
 	for (const [re, tag] of TAG_RULES) {
 		if (!re.test(w)) continue;
-		if ((tag === 'button' || tag === 'a') && interactive) continue;
+		if (interactive && (tag === 'button' || tag === 'a' || CONTROL_TAGS.has(tag) || tag === 'form')) continue;
 		return tag;
 	}
 	return 'div';
 }
 
-function textTag(raw: RawNode, interactive: boolean): string {
+function textTag(raw: RawNode, interactive: boolean, parentTag: string): string {
 	if (interactive) return 'span';
 	for (const source of [raw.name, raw.text?.styleName ?? '']) {
 		const m = /^h([1-6])\b/i.exec(source.trim()) ?? /heading[\s/_-]*([1-6])/i.exec(source);
 		if (m) return `h${m[1]}`;
 	}
+	const w = words(raw.name);
+	if (parentTag === 'figure' && /\bcaption\b/.test(w)) return 'figcaption';
+	if (/\blabel\b/.test(w)) return 'label';
 	return 'p';
 }
 

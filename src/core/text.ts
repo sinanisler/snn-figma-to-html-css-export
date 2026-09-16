@@ -44,7 +44,7 @@ function segmentStyle(seg: RawTextSegment, node: RawNode, ctx: StyleCtx): Style 
 	else if (seg.lineHeight.unit === 'PERCENT') s['line-height'] = ctx.px((seg.lineHeight.value / 100) * seg.fontSize);
 	const spacing =
 		seg.letterSpacing.unit === 'PERCENT' ? (seg.letterSpacing.value / 100) * seg.fontSize : seg.letterSpacing.value;
-	if (Math.abs(spacing) >= 0.005) s['letter-spacing'] = `${num(spacing, 2)}px`;
+	if (Math.abs(spacing) >= 0.005) s['letter-spacing'] = ctx.px(spacing);
 	const transform = TEXT_TRANSFORM[seg.textCase];
 	if (transform) s[transform[0]] = transform[1];
 	if (seg.decoration === 'UNDERLINE') s['text-decoration'] = 'underline';
@@ -59,12 +59,12 @@ export function buildText(
 	node: RawNode,
 	className: string,
 	ctx: StyleCtx,
-	onFont: (family: string, weight: number) => void,
+	onFont: (family: string, weight: number, italic: boolean) => void,
 ): TextResult {
 	const text = node.text!;
 	const segs = text.segments;
 	const styles = segs.map((seg) => {
-		onFont(seg.fontFamily, seg.fontWeight);
+		onFont(seg.fontFamily, seg.fontWeight, seg.italic);
 		return segmentStyle(seg, node, ctx);
 	});
 
