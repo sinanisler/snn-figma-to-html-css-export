@@ -220,8 +220,6 @@ export type AiSettings = {
 	reasoning: ReasoningEffort;
 	/** Sections generated at the same time. */
 	parallel: 1 | 2 | 3 | 4;
-	/** Attach a screenshot of each section (vision models only). */
-	screenshots: boolean;
 	/** Extra instructions appended to every section prompt. */
 	instructions: string;
 };
@@ -231,7 +229,6 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
 	model: 'deepseek/deepseek-v4.1-flash',
 	reasoning: 'default',
 	parallel: 3,
-	screenshots: false,
 	instructions: '',
 };
 

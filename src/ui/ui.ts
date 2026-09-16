@@ -122,7 +122,7 @@ app.innerHTML = `
 				<input id="ai-model" list="ai-models" spellcheck="false" autocomplete="off">
 				<datalist id="ai-models"></datalist>
 				<small>Any OpenRouter model id. Default: deepseek/deepseek-v4.1-flash · <a href="#" data-url="https://openrouter.ai/models">Browse models</a></small>
-				<small><strong>Recommended:</strong> a vision model with <em>Send screenshots</em> on. It sees the section and the whole page, so it understands the layout and fixes design quirks much better. <a href="#" data-url="https://openrouter.ai/models?input_modalities=image">Browse vision models</a></small>
+				<small><strong>Use a vision model.</strong> Each section is sent with screenshots of itself and the whole page, so the model understands the layout and fixes design quirks much better. <a href="#" data-url="https://openrouter.ai/models?input_modalities=image">Browse vision models</a></small>
 			</label>
 			<label>Reasoning
 				<select id="ai-reasoning">
@@ -136,13 +136,12 @@ app.innerHTML = `
 			<label>Sections at once
 				<select id="ai-parallel"><option>1</option><option>2</option><option>3</option><option>4</option></select>
 			</label>
-			<label class="check" title="Adds a screenshot of each section to the prompt. Only for models that accept images."><input type="checkbox" id="ai-shots"> Send screenshots (vision models)</label>
 			<label class="wide">Custom system prompt
 				<textarea id="ai-instructions" rows="5" spellcheck="false" placeholder="e.g. Use a 1200px max-width container. Use BEM class names. Prefer rem units. Buttons use the .btn class from our design system."></textarea>
 				<small>Added to the built-in system prompt for every section — tune it per project. Saved automatically.</small>
 			</label>
 		</div>
-		<p class="ai-privacy">Optional. Your key is sent only to openrouter.ai. Each section's generated HTML and CSS (and screenshots, if enabled) go to OpenRouter and the model provider you pick; usage is billed to your OpenRouter account.</p>
+		<p class="ai-privacy">Optional. Your key is sent only to openrouter.ai. Each section's generated HTML, CSS and screenshots go to OpenRouter and the model provider you pick; usage is billed to your OpenRouter account.</p>
 	</div>
 	<main class="editor-wrap">
 		<div class="editor" id="editor"></div>
@@ -212,7 +211,6 @@ const els = {
 	aiModels: $('ai-models'),
 	aiReasoning: $<HTMLSelectElement>('ai-reasoning'),
 	aiParallel: $<HTMLSelectElement>('ai-parallel'),
-	aiShots: $<HTMLInputElement>('ai-shots'),
 	aiInstructions: $<HTMLTextAreaElement>('ai-instructions'),
 	editor: $('editor'),
 	preview: $('preview'),
@@ -617,7 +615,6 @@ function applyAiToForm() {
 	els.aiModel.value = ai.model;
 	els.aiReasoning.value = ai.reasoning;
 	els.aiParallel.value = String(ai.parallel);
-	els.aiShots.checked = ai.screenshots;
 	els.aiInstructions.value = ai.instructions;
 }
 
@@ -1088,7 +1085,6 @@ els.aiModel.addEventListener(
 );
 els.aiReasoning.addEventListener('change', () => updateAi({ reasoning: els.aiReasoning.value as AiSettings['reasoning'] }));
 els.aiParallel.addEventListener('change', () => updateAi({ parallel: Number(els.aiParallel.value) as AiSettings['parallel'] }));
-els.aiShots.addEventListener('change', () => updateAi({ screenshots: els.aiShots.checked }));
 els.aiInstructions.addEventListener('change', () => updateAi({ instructions: els.aiInstructions.value }));
 
 els.aiCancel.addEventListener('click', () => aiController?.abort());
