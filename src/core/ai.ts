@@ -258,7 +258,7 @@ The input is machine-generated: layers are often positioned absolutely with fixe
 
 Rules:
 - Layout with normal flow, flexbox and grid. Use absolute positioning only for genuinely overlapping decoration (badges, background shapes).
-- Center content in a max-width container where the design suggests one; let backgrounds run full width.
+- The outermost element gets exactly the class prefix given and fills the full width of its parent: never give it a fixed width or let it shrink to its content. Center inner content with a max-width container where the design suggests one; let backgrounds run full width.
 - Keep every visible text exactly as given — same words, same order. Do not invent, translate, shorten or drop content.
 - Keep every image src, alt text and link href exactly as given. Do not add external images, fonts, icons or scripts.
 - Match colors, font families, font sizes, weights, line heights, spacing, radii, borders and shadows of the input at the design width.
@@ -388,6 +388,9 @@ export function assemblePages(opts: AssembleOptions): { pages: AssembledPage[]; 
 			if (p.kind === 'wrapper') {
 				const decl = Object.entries(p.style).map(([k, v]) => `  ${k}: ${resolve(v)};`);
 				cssParts.push(`.${p.className} {\n${decl.join('\n')}\n}`);
+				// Rebuilt sections span the wrapper even when it centers its children (align-items: center).
+				const rebuilt = p.children.flatMap((c) => (c.kind === 'section' && results.has(c.section.key) ? [c.section.prefix] : []));
+				if (rebuilt.length) cssParts.push(`${rebuilt.map((x) => `.${p.className} > .${x}`).join(',\n')} {\n  align-self: stretch;\n  min-width: 0;\n}`);
 				const tag = /^(section|header|footer|main|nav|aside|article|div|form|ul|ol)$/.test(p.node.tag) ? p.node.tag : 'div';
 				const id = p.node.attrs.id ? ` id="${p.node.attrs.id}"` : '';
 				return [`${pad}<${tag} class="${p.className}"${id}>`, ...p.children.map((c) => renderPlan(c, depth + 1)), `${pad}</${tag}>`].join('\n');
