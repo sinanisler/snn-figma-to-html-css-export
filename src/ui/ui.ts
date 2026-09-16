@@ -148,6 +148,11 @@ app.innerHTML = `
 	<main class="editor-wrap">
 		<div class="editor" id="editor"></div>
 		<div class="preview" id="preview" hidden><iframe id="preview-frame" title="Preview" sandbox="allow-scripts"></iframe></div>
+		<div class="empty" id="ai-empty" hidden>
+			<p><strong id="ai-empty-title">No AI rebuild yet.</strong></p>
+			<p id="ai-empty-text"></p>
+			<p><button class="btn ai" id="ai-empty-generate" type="button">✦ AI Generate</button></p>
+		</div>
 		<div class="empty" id="empty">
 			<p><strong>Select a frame, then press Generate.</strong></p>
 			<p>Select several top-level frames for a multi-page site.<br>Name them “Home / Desktop”, “Home / Mobile” to merge breakpoints.</p>
@@ -215,6 +220,10 @@ const els = {
 	preview: $('preview'),
 	frame: $<HTMLIFrameElement>('preview-frame'),
 	empty: $('empty'),
+	aiEmpty: $('ai-empty'),
+	aiEmptyTitle: $('ai-empty-title'),
+	aiEmptyText: $('ai-empty-text'),
+	aiEmptyGenerate: $<HTMLButtonElement>('ai-empty-generate'),
 	aiRun: $('ai-run'),
 	aiRunToggle: $<HTMLButtonElement>('ai-run-toggle'),
 	aiRunTitle: $('ai-run-title'),
@@ -272,6 +281,9 @@ const assetBytes = () => [...assets.values()].reduce((sum, a) => sum + a.bytes.l
 const baseName = () => cssSlug(result?.roots[0]?.name ?? 'export', 'export');
 
 const useAi = () => source === 'ai' && aiPlans !== null && settings.format !== 'email';
+const stylingName = (s: Styling) => (s === 'tailwind' ? 'Tailwind' : 'CSS');
+/** The AI view is selected but this styling has no rebuilt section to show (yet). */
+const aiViewEmpty = () => useAi() && aiResults.size === 0;
 
 function output(mode: AssetMode, layout: Layout = 'vite'): OutFile[] {
 	const opts = {
@@ -381,6 +393,27 @@ function previewHtml(): string {
 
 function renderView() {
 	if (!doc) return;
+	const empty = aiViewEmpty();
+	els.aiEmpty.hidden = !empty;
+	els.copy.disabled = empty;
+	if (empty) {
+		// Never show the standard export dressed up as AI output.
+		const styling = formatParts(settings.format).styling;
+		const other = [...aiStash.keys()].find((k) => k !== styling);
+		els.preview.hidden = true;
+		els.editor.hidden = true;
+		els.devices.hidden = true;
+		els.theme.hidden = true;
+		const running = aiController !== null;
+		els.aiEmptyTitle.textContent = running ? `AI is rebuilding for ${stylingName(styling)}…` : `No AI rebuild for ${stylingName(styling)} yet.`;
+		els.aiEmptyText.textContent = running
+			? 'Sections appear here as they finish.'
+			: `${other ? `The ${stylingName(other)} rebuild is kept — switch the format back to see it. ` : ''}Press AI Generate to rebuild this page for ${stylingName(styling)}, or switch to Standard.`;
+		els.aiEmptyGenerate.hidden = running;
+		els.aiEmptyGenerate.disabled = els.aiGenerate.disabled;
+		previewKey = '';
+		return;
+	}
 	const isPreview = tab === PREVIEW;
 	els.preview.hidden = !isPreview;
 	els.editor.hidden = isPreview;
@@ -477,7 +510,7 @@ function setMenuState() {
 	for (const b of els.menu.querySelectorAll<HTMLButtonElement>('button[data-dl]')) {
 		const kind = b.dataset.dl;
 		if (kind === 'tokens') continue;
-		b.disabled = !doc || (kind === 'starter' && settings.format === 'email') || (kind === 'next' && framework !== 'react');
+		b.disabled = !doc || aiViewEmpty() || (kind === 'starter' && settings.format === 'email') || (kind === 'next' && framework !== 'react');
 	}
 	els.aiGenerate.disabled = busy || aiController !== null || selectionIds.length === 0 || settings.format === 'email';
 	els.aiGenerate.title =
@@ -502,6 +535,7 @@ function renderOutput() {
 	renderTabs();
 	renderView();
 	renderNotes();
+	setMenuState();
 }
 
 function renderAll() {
@@ -524,7 +558,6 @@ function renderAll() {
 	renderNotes();
 	setMenuState();
 	els.empty.hidden = true;
-	els.copy.disabled = false;
 
 	const bytes = assetBytes();
 	const heavy = settings.inlineImages && (bytes > ZIP_RECOMMEND_BYTES || assets.size > ZIP_RECOMMEND_COUNT);
@@ -876,6 +909,7 @@ window.addEventListener('message', (event: MessageEvent) => {
 
 els.generate.addEventListener('click', generateNow);
 els.aiGenerate.addEventListener('click', () => void startAi());
+els.aiEmptyGenerate.addEventListener('click', () => void startAi());
 document.addEventListener('keydown', (e) => {
 	if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
 		e.preventDefault();
@@ -897,12 +931,9 @@ els.format.addEventListener('change', () => {
 	aiStyling = after;
 	aiResults = restored?.results ?? new Map();
 	aiStates = restored?.states ?? new Map();
-	if (restored) {
-		els.status.textContent = `Restored the AI rebuild for ${after === 'tailwind' ? 'Tailwind' : 'CSS'}`;
-	} else {
-		if (source === 'ai') els.status.textContent = `No AI rebuild for ${after === 'tailwind' ? 'Tailwind' : 'CSS'} yet — press AI Generate. Switching back restores the previous one.`;
-		source = 'standard';
-	}
+	// The AI/Standard choice stays; an AI view without results shows an empty state instead.
+	if (restored) els.status.textContent = `Restored the AI rebuild for ${stylingName(after)}`;
+	aiVersion++;
 	renderOutput();
 	renderAiRun();
 });
