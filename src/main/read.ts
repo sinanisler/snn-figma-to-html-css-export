@@ -701,6 +701,29 @@ async function imageAsset(hash: string, nodeName: string, ctx: Ctx): Promise<str
 	}
 }
 
+/** A layer with a stroke paint but 0 width on every side (common in HTML → Figma imports). */
+function hasZeroWidthStroke(n: N): boolean {
+	const own = Array.isArray(n.strokes) && n.strokes.some((p: N) => p.visible !== false) && readStrokeWeights(n).every((w) => !w);
+	return own || (Array.isArray(n.children) && n.children.some((c: N) => c.visible !== false && hasZeroWidthStroke(c)));
+}
+
+/**
+ * Figma's SVG export still draws strokes whose side widths are all 0, as an outline path
+ * of the layer's rectangle. Drop those unfilled rectangle outlines when such a layer is inside.
+ */
+function stripZeroWidthStrokes(n: N, bytes: Uint8Array): Uint8Array {
+	if (!hasZeroWidthStroke(n)) return bytes;
+	// Byte-wise string keeps any UTF-8 text intact; the pattern only matches ASCII.
+	let text = '';
+	for (let i = 0; i < bytes.length; i += 8192) text += String.fromCharCode(...bytes.subarray(i, i + 8192));
+	const rect = /<path d="M-?[\d.]+ -?[\d.]+H-?[\d.]+V-?[\d.]+H-?[\d.]+V-?[\d.]+Z" stroke="[^"]*"(?: stroke-width="[^"]*")?\/>\s*/g;
+	const cleaned = text.replace(rect, (m) => (/\sfill=/.test(m) ? m : ''));
+	if (cleaned === text) return bytes;
+	const out = new Uint8Array(cleaned.length);
+	for (let i = 0; i < cleaned.length; i++) out[i] = cleaned.charCodeAt(i);
+	return out;
+}
+
 async function exportNodeAsset(n: N, kind: 'SVG' | 'PNG', ctx: Ctx): Promise<string | undefined> {
 	const id = `node-${n.id}`;
 	if (!ctx.options.assetBytes) {
@@ -712,7 +735,7 @@ async function exportNodeAsset(n: N, kind: 'SVG' | 'PNG', ctx: Ctx): Promise<str
 	try {
 		const bytes: Uint8Array =
 			kind === 'SVG'
-				? await n.exportAsync({ format: 'SVG', useAbsoluteBounds: true })
+				? stripZeroWidthStrokes(n, await n.exportAsync({ format: 'SVG', useAbsoluteBounds: true }))
 				: await n.exportAsync({ format: 'PNG', useAbsoluteBounds: true, constraint: { type: 'SCALE', value: ctx.options.rasterScale } });
 		const ext = kind === 'SVG' ? 'svg' : 'png';
 		ctx.assets.set(id, {
