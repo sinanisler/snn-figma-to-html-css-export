@@ -122,6 +122,7 @@ app.innerHTML = `
 				<input id="ai-model" list="ai-models" spellcheck="false" autocomplete="off">
 				<datalist id="ai-models"></datalist>
 				<small>Any OpenRouter model id. Default: deepseek/deepseek-v4.1-flash · <a href="#" data-url="https://openrouter.ai/models">Browse models</a></small>
+				<small><strong>Recommended:</strong> a vision model with <em>Send screenshots</em> on. It sees the section and the whole page, so it understands the layout and fixes design quirks much better. <a href="#" data-url="https://openrouter.ai/models?input_modalities=image">Browse vision models</a></small>
 			</label>
 			<label>Reasoning
 				<select id="ai-reasoning">

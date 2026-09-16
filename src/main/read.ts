@@ -173,6 +173,14 @@ async function readNode(
 			const c = await readNode(child, n, raw.autoLayout, ctx);
 			if (c) raw.children.push(c);
 		}
+		// A guessed layout flows in canvas order; layer order is whatever the designer left behind.
+		const al = raw.autoLayout;
+		if (al?.inferred) {
+			const byRow = al.mode === 'HORIZONTAL' && !al.wrap;
+			const main = (c: RawNode) => (byRow ? c.x : c.y);
+			const cross = (c: RawNode) => (byRow ? c.y : c.x);
+			raw.children.sort((a, b) => Math.round(main(a) - main(b)) || Math.round(cross(a) - cross(b)));
+		}
 	}
 	return raw;
 }
