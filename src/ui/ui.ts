@@ -253,6 +253,8 @@ let aiPlans: PagePlan[] | null = null;
 let aiResults = new Map<string, SectionResult>();
 let aiStates = new Map<string, SectionState>();
 let aiStyling: Styling | null = null;
+/** Rebuilds for the other styling (CSS ↔ Tailwind), kept so switching the format back restores them. */
+const aiStash = new Map<Styling, { results: Map<string, SectionResult>; states: Map<string, SectionState> }>();
 let aiController: AbortController | null = null;
 let aiVersion = 0;
 let aiAfterGenerate = false;
@@ -841,6 +843,7 @@ window.addEventListener('message', (event: MessageEvent) => {
 				aiPlans = null;
 				aiResults = new Map();
 				aiStates = new Map();
+				aiStash.clear();
 				source = 'standard';
 				els.aiRun.hidden = true;
 			}
@@ -883,15 +886,24 @@ document.addEventListener('keydown', (e) => {
 els.format.addEventListener('change', () => {
 	const before = formatParts(settings.format).styling;
 	update({ format: els.format.value as Format });
-	if (aiStyling && before !== formatParts(settings.format).styling && aiResults.size) {
-		els.status.textContent = 'Styling changed (CSS ↔ Tailwind) — press AI Generate to rebuild the sections for it';
-		aiPlans = null;
-		aiResults = new Map();
-		aiStates = new Map();
+	const after = formatParts(settings.format).styling;
+	if (!aiStyling || before === after) return;
+	// Finished sections stay in the stashed maps; an unfinished run for the old styling stops.
+	aiController?.abort();
+	if (aiResults.size) aiStash.set(aiStyling, { results: aiResults, states: aiStates });
+	const restored = aiStash.get(after);
+	aiStash.delete(after);
+	aiStyling = after;
+	aiResults = restored?.results ?? new Map();
+	aiStates = restored?.states ?? new Map();
+	if (restored) {
+		els.status.textContent = `Restored the AI rebuild for ${after === 'tailwind' ? 'Tailwind' : 'CSS'}`;
+	} else {
+		if (source === 'ai') els.status.textContent = `No AI rebuild for ${after === 'tailwind' ? 'Tailwind' : 'CSS'} yet — press AI Generate. Switching back restores the previous one.`;
 		source = 'standard';
-		renderOutput();
-		renderAiRun();
 	}
+	renderOutput();
+	renderAiRun();
 });
 els.source.addEventListener('click', (e) => {
 	const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-src]');
