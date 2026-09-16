@@ -136,8 +136,9 @@ app.innerHTML = `
 				<select id="ai-parallel"><option>1</option><option>2</option><option>3</option><option>4</option></select>
 			</label>
 			<label class="check" title="Adds a screenshot of each section to the prompt. Only for models that accept images."><input type="checkbox" id="ai-shots"> Send screenshots (vision models)</label>
-			<label class="wide">Extra instructions
-				<textarea id="ai-instructions" rows="2" placeholder="e.g. Use a 1200px max-width container. Use BEM class names."></textarea>
+			<label class="wide">Custom system prompt
+				<textarea id="ai-instructions" rows="5" spellcheck="false" placeholder="e.g. Use a 1200px max-width container. Use BEM class names. Prefer rem units. Buttons use the .btn class from our design system."></textarea>
+				<small>Added to the built-in system prompt for every section — tune it per project. Saved automatically.</small>
 			</label>
 		</div>
 		<p class="ai-privacy">Optional. Your key is sent only to openrouter.ai. Each section's generated HTML and CSS (and screenshots, if enabled) go to OpenRouter and the model provider you pick; usage is billed to your OpenRouter account.</p>

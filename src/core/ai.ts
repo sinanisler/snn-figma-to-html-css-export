@@ -245,7 +245,7 @@ export type ChatMessage = {
 	content: string | ({ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } })[];
 };
 
-export function systemPrompt(styling: Styling): string {
+export function systemPrompt(styling: Styling, custom?: string): string {
 	const styleRules =
 		styling === 'tailwind'
 			? `- Style with Tailwind CSS v4 utility classes (arbitrary values like w-[372px] or bg-[#0f172a] are fine). Design mobile-first: base classes for phones, then sm:, md:, lg:, xl: for larger screens.
@@ -273,7 +273,14 @@ Answer with exactly two fenced code blocks and nothing else:
 \`\`\`
 \`\`\`css
 …section CSS…
-\`\`\``;
+\`\`\`${
+		custom?.trim()
+			? `
+
+Project-specific instructions from the developer. Follow them, as long as the answer keeps the two-block format above:
+${custom.trim()}`
+			: ''
+	}`;
 }
 
 export function sectionMessages(section: SectionPlan, ctx: PromptContext): ChatMessage[] {
@@ -293,7 +300,6 @@ export function sectionMessages(section: SectionPlan, ctx: PromptContext): ChatM
 	if (doc.media.length && section.css.includes('@media'))
 		lines.push('The input CSS already has @media rules taken from the designer\'s smaller breakpoint frames — keep that behaviour.');
 	if (ctx.screenshot) lines.push('A screenshot of the section as designed is attached.');
-	if (ctx.instructions?.trim()) lines.push(`Extra instructions from the user:\n${ctx.instructions.trim()}`);
 	lines.push(`Input HTML:\n\`\`\`html\n${section.html}\n\`\`\``);
 	lines.push(`Input CSS:\n\`\`\`css\n${section.css || '/* none */'}\n\`\`\``);
 	const text = lines.join('\n\n');
@@ -304,7 +310,7 @@ export function sectionMessages(section: SectionPlan, ctx: PromptContext): ChatM
 			]
 		: text;
 	return [
-		{ role: 'system', content: systemPrompt(styling) },
+		{ role: 'system', content: systemPrompt(styling, ctx.instructions) },
 		{ role: 'user', content },
 	];
 }

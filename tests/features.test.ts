@@ -322,7 +322,8 @@ describe('AI rebuild', () => {
 		const user = messages[1].content as { type: string; text?: string }[];
 		expect(user[0].text).toContain('Section 2 of 2: "Features"');
 		expect(user[0].text).toContain('Class prefix: "features"');
-		expect(user[0].text).toContain('Use a 1200px container');
+		expect(messages[0].content).toContain('Use a 1200px container');
+		expect(user[0].text).not.toContain('Use a 1200px container');
 		expect(user[1]).toMatchObject({ type: 'image_url' });
 	});
 
