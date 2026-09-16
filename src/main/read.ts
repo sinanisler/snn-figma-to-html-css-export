@@ -214,6 +214,14 @@ const STATE_VALUES: [RegExp, PseudoState][] = [
 	[/^(pressed|active|press)$/i, 'active'],
 ];
 
+function safeVariantProps(n: N): Record<string, string> {
+	try {
+		return n.variantProperties ?? {};
+	} catch {
+		return {};
+	}
+}
+
 async function readComponent(n: N, raw: RawNode, ctx: Ctx): Promise<void> {
 	let main: N = null;
 	try {
@@ -226,7 +234,8 @@ async function readComponent(n: N, raw: RawNode, ctx: Ctx): Promise<void> {
 	raw.component = { id: (set ?? main).id, name: (set ?? main).name };
 	if (!set || ctx.inState) return;
 
-	const props: Record<string, string> = main.variantProperties ?? {};
+	// Figma throws when the component set has errors (duplicate/malformed variants).
+	const props = safeVariantProps(main);
 	const stateKey = Object.keys(props).find((k) => STATE_PROP.test(k));
 	if (!stateKey || !DEFAULT_STATE.test(props[stateKey])) return;
 
@@ -236,7 +245,7 @@ async function readComponent(n: N, raw: RawNode, ctx: Ctx): Promise<void> {
 		const warningCount = ctx.warnings.length;
 		try {
 			for (const sibling of set.children as N[]) {
-				const sp: Record<string, string> = sibling.variantProperties ?? {};
+				const sp = safeVariantProps(sibling);
 				const same = Object.keys(props).every((k) => k === stateKey || sp[k] === props[k]);
 				const state = same ? STATE_VALUES.find(([re]) => re.test(sp[stateKey] ?? ''))?.[1] : undefined;
 				if (!state || states.some((s) => s.state === state)) continue;
