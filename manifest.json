@@ -1,6 +1,6 @@
 {
 	"id": "1682098848751387838",
-	"name": "Figma to HTML/Tailwind/React and AI Responsive HTML",
+	"name": "Figma to HTML,Tailwind,React and AI Responsive HTML",
 	"api": "1.0.0",
 	"main": "src/main/main.ts",
 	"ui": "src/ui/ui.ts",
