@@ -84,6 +84,8 @@ function withoutPlacement<T>(nodes: IRNode[], fn: () => T): T {
 		const s: Style = {};
 		for (const [k, v] of Object.entries(n.style)) if (!PLACEMENT_KEYS.has(k)) s[k] = v;
 		if (s.width && !s['max-width']) s['max-width'] = '100%';
+		// Stay the containing block for absolutely positioned children, or they escape to the page.
+		if (n.style.position) s.position = 'relative';
 		n.style = s;
 	});
 	try {
