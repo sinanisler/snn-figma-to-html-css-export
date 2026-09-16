@@ -174,14 +174,6 @@ input {
 	background: var(--figma-color-bg, #fff);
 }
 
-.banner {
-	padding: 8px 12px;
-	background: var(--figma-color-bg-warning-tertiary, #fff4e5);
-	color: var(--figma-color-text, #1e1e1e);
-	border-bottom: 1px solid var(--figma-color-border-warning, #ffc670);
-	line-height: 1.4;
-}
-
 .editor-wrap {
 	position: relative;
 	flex: 1 1 auto;

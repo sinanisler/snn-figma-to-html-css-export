@@ -144,7 +144,6 @@ app.innerHTML = `
 		</div>
 		<p class="ai-privacy">Optional. Your key is sent only to openrouter.ai. Each section's generated HTML and CSS (and screenshots, if enabled) go to OpenRouter and the model provider you pick; usage is billed to your OpenRouter account.</p>
 	</div>
-	<div class="banner" id="banner" hidden></div>
 	<main class="editor-wrap">
 		<div class="editor" id="editor"></div>
 		<div class="preview" id="preview" hidden><iframe id="preview-frame" title="Preview" sandbox="allow-scripts"></iframe></div>
@@ -215,7 +214,6 @@ const els = {
 	aiParallel: $<HTMLSelectElement>('ai-parallel'),
 	aiShots: $<HTMLInputElement>('ai-shots'),
 	aiInstructions: $<HTMLTextAreaElement>('ai-instructions'),
-	banner: $('banner'),
 	editor: $('editor'),
 	preview: $('preview'),
 	frame: $<HTMLIFrameElement>('preview-frame'),
@@ -562,10 +560,7 @@ function renderAll() {
 	const bytes = assetBytes();
 	const heavy = settings.inlineImages && (bytes > ZIP_RECOMMEND_BYTES || assets.size > ZIP_RECOMMEND_COUNT);
 	els.download.classList.toggle('primary', heavy);
-	els.banner.hidden = !heavy;
-	if (heavy) {
-		els.banner.textContent = `This export includes ${assets.size} images (${formatBytes(bytes)}). Download the .zip for separate asset files — copying embeds them all as base64.`;
-	}
+	els.copy.title = heavy ? `Copying embeds all ${assets.size} images as base64 (${formatBytes(bytes)}) — Download the .zip for separate asset files` : '';
 	renderStatus();
 }
 
