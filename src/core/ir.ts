@@ -49,7 +49,8 @@ export type IRSharedClass = { name: string; style: Style };
 export type IRPage = { name: string; slug: string; title: string; roots: IRNode[] };
 
 export type IRWarning = { nodeId: string; nodeName: string; code: string; detail?: string };
-export type IRVariable = { name: string; value: string };
+/** `modes` lists the values of other modes of the variable's collection that differ from `value`. */
+export type IRVariable = { name: string; value: string; collection?: string; modes?: { mode: string; value: string }[] };
 export type FontUse = { family: string; weights: number[]; italicWeights: number[] };
 
 export type IRDocument = {

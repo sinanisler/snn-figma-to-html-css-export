@@ -8,12 +8,20 @@ import { Compartment, EditorState } from '@codemirror/state';
 import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark';
 import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view';
 
-export type ViewerLang = 'html' | 'css' | 'jsx' | 'vue' | 'svelte' | 'json' | 'js';
+export type ViewerLang = 'html' | 'css' | 'jsx' | 'tsx' | 'vue' | 'svelte' | 'json' | 'js' | 'ts';
 
 export type Viewer = { show(text: string, lang: ViewerLang): void; setWrap(on: boolean): void };
 
 const languageFor = (lang: ViewerLang) =>
-	lang === 'css' ? css() : lang === 'jsx' || lang === 'js' ? javascript({ jsx: true }) : lang === 'json' ? javascript() : html();
+	lang === 'css'
+		? css()
+		: lang === 'jsx' || lang === 'js'
+			? javascript({ jsx: true })
+			: lang === 'tsx' || lang === 'ts'
+				? javascript({ jsx: lang === 'tsx', typescript: true })
+				: lang === 'json'
+					? javascript()
+					: html();
 
 const theme = EditorView.theme({
 	'&': {

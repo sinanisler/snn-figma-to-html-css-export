@@ -1,5 +1,5 @@
 import type { RawAsset } from '../shared/types';
-import { escapeAttr, escapeHtml, type Style } from './format';
+import { cssSlug, escapeAttr, escapeHtml, type Style } from './format';
 import { classList, primaryClass, walk, type IRDocument, type IRLink, type IRNode, type IRRule } from './ir';
 import { toUtilities } from './tailwind';
 
@@ -7,6 +7,11 @@ import { toUtilities } from './tailwind';
 export type AssetMode = 'inline' | 'files' | 'preview';
 export type Dialect = 'html' | 'jsx' | 'email';
 export type Styling = 'css' | 'tailwind';
+/** How dynamic values are written: JSX `{x}`, Vue `{{ x }}` / `:attr`, Svelte `{x}`. */
+export type Templating = 'jsx' | 'vue' | 'svelte';
+
+/** Prop names that replace a node's literal text, src, alt or href. */
+export type Binding = { text?: string; src?: string; alt?: string; href?: string; className?: string };
 
 export type RenderOptions = {
 	assets: Map<string, RawAsset>;
@@ -16,7 +21,17 @@ export type RenderOptions = {
 	inlineSvg?: boolean;
 	dialect?: Dialect;
 	styling?: Styling;
+	/** Vue and Svelte templates (JSX is implied by the jsx dialect). */
+	templating?: Templating;
 	linkHref?: (link: IRLink) => string;
+	/** Renders a node as a component tag, e.g. <Card title="…" />. */
+	use?: (node: IRNode) => { name: string; props: [string, string][] } | null;
+	/** Inside a component template: which values come from props. */
+	bind?: (node: IRNode) => Binding | null;
+	/** Replaces a node's markup entirely (padding is the indentation to use). */
+	replace?: (node: IRNode, pad: string) => string | null;
+	/** Shared counter so inline SVG ids stay unique across several render calls. */
+	svgSeq?: { n: number };
 };
 
 export const RESET = `*,
@@ -131,7 +146,36 @@ export type CssOptions = {
 	tailwind?: boolean;
 	/** Tailwind from the browser CDN: variables only. */
 	tailwindVarsOnly?: boolean;
+	/** Variable modes named "dark" apply under prefers-color-scheme: dark. */
+	systemDark?: boolean;
 };
+
+/** Custom properties: the design's values on :root, other variable modes behind data attributes. */
+export function variablesCss(doc: IRDocument, systemDark = false): string[] {
+	const parts: string[] = [];
+	if (!doc.variables.length) return parts;
+	parts.push(`:root {\n${doc.variables.map((v) => `  ${v.name}: ${v.value};`).join('\n')}\n}`);
+	const moded = doc.variables.filter((v) => v.modes?.length);
+	if (!moded.length) return parts;
+	const collections = new Set(moded.map((v) => v.collection ?? ''));
+	const attr = (col: string) => (collections.size > 1 ? `data-${cssSlug(col, 'theme')}` : 'data-theme');
+	const blocks = new Map<string, { attr: string; mode: string; lines: string[] }>();
+	for (const v of moded) {
+		for (const m of v.modes!) {
+			const a = attr(v.collection ?? '');
+			const key = `${a}|${m.mode}`;
+			const block = blocks.get(key) ?? { attr: a, mode: m.mode, lines: [] };
+			block.lines.push(`${v.name}: ${m.value};`);
+			blocks.set(key, block);
+		}
+	}
+	for (const b of blocks.values()) {
+		parts.push(`[${b.attr}="${cssSlug(b.mode, 'mode')}"] {\n${b.lines.map((l) => `  ${l}`).join('\n')}\n}`);
+		if (systemDark && /dark/i.test(b.mode))
+			parts.push(`@media (prefers-color-scheme: dark) {\n  :root:not([${b.attr}]) {\n${b.lines.map((l) => `    ${l}`).join('\n')}\n  }\n}`);
+	}
+	return parts;
+}
 
 /** Stylesheet for the whole document. With tailwind, only what utilities can't express. */
 export function cssText(doc: IRDocument, resolve: Resolver, opts: CssOptions = {}): string {
@@ -143,29 +187,48 @@ export function cssText(doc: IRDocument, resolve: Resolver, opts: CssOptions = {
 	parts.push(header.join('\n'));
 	const utilities = opts.tailwind || opts.tailwindVarsOnly;
 	if (!utilities) parts.push(RESET);
-	if (doc.variables.length) parts.push(`:root {\n${doc.variables.map((v) => `  ${v.name}: ${v.value};`).join('\n')}\n}`);
+	parts.push(...variablesCss(doc, opts.systemDark));
 	if (utilities) return parts.join('\n\n') + '\n';
+	parts.push(...ruleBlocks(doc, resolve));
+	return parts.filter(Boolean).join('\n\n') + '\n';
+}
 
-	for (const c of doc.sharedClasses) parts.push(rule(`.${c.name}`, c.style, resolve));
+/** Class, state and media rules; with `nodes`, only those that style that subtree. */
+export function ruleBlocks(doc: IRDocument, resolve: Resolver, nodes?: IRNode[]): string[] {
+	const parts: string[] = [];
+	let inScope: Set<IRNode> | null = null;
+	let sharedUsed: Set<string> | null = null;
+	if (nodes) {
+		const scope = new Set<IRNode>();
+		const shared = new Set<string>();
+		walk(nodes, (n) => {
+			scope.add(n);
+			for (const s of n.shared) shared.add(s);
+		});
+		inScope = scope;
+		sharedUsed = shared;
+	}
+
+	for (const c of doc.sharedClasses) if (!sharedUsed || sharedUsed.has(c.name)) parts.push(rule(`.${c.name}`, c.style, resolve));
 
 	const emitted = new Set<string>();
 	const runClasses = new Set<string>();
-	for (const page of doc.pages) {
-		walk(page.roots, (node) => {
-			if (node.className && !emitted.has(node.className)) {
-				emitted.add(node.className);
-				parts.push(rule(`.${node.className}`, node.style, resolve));
-			}
-			for (const run of node.runs ?? []) {
-				if (!run.className || runClasses.has(run.className)) continue;
-				runClasses.add(run.className);
-				parts.push(rule(`.${run.className}`, run.style, resolve));
-			}
-		});
-	}
+	const roots = nodes ?? doc.pages.flatMap((p) => p.roots);
+	walk(roots, (node) => {
+		if (node.className && !emitted.has(node.className)) {
+			emitted.add(node.className);
+			parts.push(rule(`.${node.className}`, node.style, resolve));
+		}
+		for (const run of node.runs ?? []) {
+			if (!run.className || runClasses.has(run.className)) continue;
+			runClasses.add(run.className);
+			parts.push(rule(`.${run.className}`, run.style, resolve));
+		}
+	});
 
 	const byMedia = new Map<string, string[]>();
 	for (const r of doc.rules) {
+		if (inScope && !inScope.has(r.target)) continue;
 		const sel = selectorFor(r);
 		if (!sel) continue;
 		if (!r.media) {
@@ -179,7 +242,7 @@ export function cssText(doc: IRDocument, resolve: Resolver, opts: CssOptions = {
 		const blocks = byMedia.get(m);
 		if (blocks) parts.push(`@media ${m} {\n${blocks.join('\n\n')}\n}`);
 	}
-	return parts.filter(Boolean).join('\n\n') + '\n';
+	return parts.filter(Boolean);
 }
 
 // ---------- markup ----------
@@ -255,13 +318,30 @@ function svgMarkup(bytes: Uint8Array, cls: string, alt: string, dialect: Dialect
 }
 
 export function renderMarkup(doc: IRDocument, pageIndex: number, opts: RenderOptions): string {
+	return renderNodes(doc, doc.pages[pageIndex].roots, opts);
+}
+
+/** Braces and mustaches that a framework template would otherwise read as expressions. */
+function escapeTemplate(s: string, templating: Templating | undefined): string {
+	if (templating === 'svelte') return s.replace(/[{}]/g, (c) => (c === '{' ? '&#123;' : '&#125;'));
+	if (templating === 'vue') return s.replace(/\{\{/g, '&#123;&#123;').replace(/\}\}/g, '&#125;&#125;');
+	return s;
+}
+
+function expression(name: string, templating: Templating | undefined, attr?: string): string {
+	if (templating === 'vue') return attr ? ` :${attr}="${name}"` : `{{ ${name} }}`;
+	return attr ? ` ${attr}={${name}}` : `{${name}}`;
+}
+
+export function renderNodes(doc: IRDocument, roots: IRNode[], opts: RenderOptions): string {
 	const dialect = opts.dialect ?? 'html';
 	const styling = opts.styling ?? 'css';
+	const templating: Templating | undefined = dialect === 'jsx' ? 'jsx' : opts.templating;
 	const resolve = assetResolver(opts.assets, opts.assetMode, opts.assetPrefix);
 	const shared = new Map(doc.sharedClasses.map((c) => [c.name, c.style]));
 	const tw = styling === 'tailwind' ? tailwindIndex(doc) : null;
 	const classAttr = dialect === 'jsx' ? 'className' : 'class';
-	let svgSeq = 0;
+	const seq = opts.svgSeq ?? { n: 0 };
 
 	const merged = (n: IRNode): Style => Object.assign({}, ...n.shared.map((s) => shared.get(s) ?? {}), n.style);
 
@@ -291,14 +371,15 @@ export function renderMarkup(doc: IRDocument, pageIndex: number, opts: RenderOpt
 	const text = (s: string) =>
 		dialect === 'jsx'
 			? jsxText(s).replace(/\r\n|\n|\u2028|\u2029/g, '<br />')
-			: escapeHtml(s).replace(/\r\n|\n|\u2028|\u2029/g, '<br>');
+			: escapeTemplate(escapeHtml(s), templating).replace(/\r\n|\n|\u2028|\u2029/g, '<br>');
+	const attrValue = (v: string) => escapeTemplate(escapeAttr(v), templating === 'jsx' ? undefined : templating);
 
-	const renderRuns = (node: IRNode): string => {
+	const renderRuns = (node: IRNode, bound?: string): string => {
 		const inner = (node.runs ?? [])
-			.map((run) => {
-				const body = text(run.text);
+			.map((run, i) => {
+				const body = bound && i === 0 ? expression(bound, templating) : text(run.text);
 				const attrs = presentation(null, run.style, run.className ? [run.className] : []);
-				if (run.href) return `<a href="${escapeAttr(run.href)}"${attrs}>${body}</a>`;
+				if (run.href) return `<a href="${attrValue(run.href)}"${attrs}>${body}</a>`;
 				return attrs ? `<span${attrs}>${body}</span>` : body;
 			})
 			.join('');
@@ -308,29 +389,49 @@ export function renderMarkup(doc: IRDocument, pageIndex: number, opts: RenderOpt
 
 	const renderNode = (node: IRNode, depth: number): string => {
 		const pad = '  '.repeat(depth);
+		const replaced = opts.replace?.(node, pad);
+		if (replaced != null) return replaced;
 		const style = dialect === 'email' || tw ? merged(node) : {};
+		const usage = opts.use?.(node);
+		if (usage) {
+			const cls = /\b(?:class|className)="([^"]*)"/.exec(presentation(node, style, classList(node)))?.[1];
+			const classProp = cls ? ` ${templating === 'jsx' ? 'className' : 'class'}="${cls}"` : '';
+			const props = usage.props.map(([k, v]) => ` ${k}="${attrValue(v)}"`).join('');
+			return `${pad}<${usage.name}${classProp}${props} />`;
+		}
+		const binding = opts.bind?.(node) ?? null;
 		const alt = node.attrs.alt ?? '';
-		if (node.svgAsset && opts.inlineSvg && dialect !== 'email') {
+		if (node.svgAsset && opts.inlineSvg && dialect !== 'email' && !binding?.src) {
 			const asset = opts.assets.get(node.svgAsset);
 			const cls = tw ? toUtilities(style).classes.join(' ') : classList(node).join(' ');
-			const svg = asset && svgMarkup(asset.bytes, cls, alt, dialect, ++svgSeq);
-			if (svg) return pad + svg;
+			const svg = asset && svgMarkup(asset.bytes, cls, alt, dialect, ++seq.n);
+			if (svg) return pad + escapeTemplate(svg, templating === 'jsx' ? undefined : templating);
 		}
 
 		// Classless list wrappers get display: contents from the reset stylesheet.
 		let attrs = node.wrapper && !tw && dialect !== 'email' ? '' : presentation(node, style, classList(node));
+		if (binding?.className) {
+			// Vue passes a class given to the component through to its root element on its own.
+			const cls = templating === 'vue' ? '' : expression(binding.className, templating, templating === 'jsx' ? 'className' : 'class');
+			attrs = attrs.replace(/\s(?:class|className)="[^"]*"/, '') + cls;
+		}
 		for (const [k, v] of Object.entries(node.attrs)) {
 			const name = dialect === 'jsx' && k === 'for' ? 'htmlFor' : k;
-			attrs += ` ${name}="${escapeAttr(resolve(v))}"`;
+			const bound = binding?.[k as keyof Binding];
+			attrs += bound ? expression(bound, templating, name) : ` ${name}="${attrValue(resolve(v))}"`;
 		}
-		if (node.link) attrs += ` href="${escapeAttr(opts.linkHref ? opts.linkHref(node.link) : '#')}"`;
+		if (node.link) {
+			attrs += binding?.href
+				? expression(binding.href, templating, 'href')
+				: ` href="${attrValue(opts.linkHref ? opts.linkHref(node.link) : '#')}"`;
+		}
 
 		const open = `<${node.tag}${attrs}`;
 		if (VOID_TAGS.has(node.tag)) return `${pad}${open}${dialect === 'jsx' ? ' />' : '>'}`;
-		if (node.runs) return `${pad}${open}>${renderRuns(node)}</${node.tag}>`;
+		if (node.runs) return `${pad}${open}>${renderRuns(node, binding?.text)}</${node.tag}>`;
 		if (node.children.length === 0) return `${pad}${open}></${node.tag}>`;
 		return [`${pad}${open}>`, ...node.children.map((c) => renderNode(c, depth + 1)), `${pad}</${node.tag}>`].join('\n');
 	};
 
-	return doc.pages[pageIndex].roots.map((n) => renderNode(n, 0)).join('\n');
+	return roots.map((n) => renderNode(n, 0)).join('\n');
 }

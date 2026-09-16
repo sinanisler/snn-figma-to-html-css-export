@@ -10,6 +10,8 @@ import type {
 	RawText,
 	RawTextSegment,
 	RawState,
+	RawTransition,
+	ModeValue,
 	PseudoState,
 	ReadOptions,
 	ReadResult,
@@ -240,7 +242,39 @@ async function readComponent(n: N, raw: RawNode, ctx: Ctx): Promise<void> {
 		ctx.stateCache.set(main.id, states);
 	}
 	const states = ctx.stateCache.get(main.id)!;
-	if (states.length) raw.states = states;
+	if (states.length) {
+		raw.states = states;
+		const transition = readStateTransition(n) || readStateTransition(main);
+		if (transition) raw.stateTransition = transition;
+	}
+}
+
+const STATE_TRIGGERS = new Set(['ON_HOVER', 'WHILE_HOVERING', 'ON_PRESS', 'WHILE_PRESSING', 'MOUSE_ENTER']);
+
+/** The animation of a "Change to" interaction between variants. */
+function readStateTransition(n: N): RawTransition | undefined {
+	let reactions: Reaction[];
+	try {
+		reactions = Array.isArray(n.reactions) ? n.reactions : [];
+	} catch {
+		return undefined;
+	}
+	for (const r of reactions) {
+		const trigger = r.trigger ? r.trigger.type : '';
+		if (!STATE_TRIGGERS.has(trigger)) continue;
+		const actions: N[] = r.actions ? (r.actions as N[]) : r.action ? [r.action] : [];
+		for (const a of actions) {
+			if (a.type !== 'NODE' || a.navigation !== 'CHANGE_TO') continue;
+			const t = a.transition;
+			if (!t || t.type === 'INSTANT') return { duration: 0, easing: 'LINEAR' };
+			const easing = t.easing ? t.easing.type : 'EASE_OUT';
+			const out: RawTransition = { duration: typeof t.duration === 'number' ? t.duration : 0.3, easing: easing };
+			const fn = t.easing ? t.easing.easingFunctionCubicBezier : null;
+			if (fn) out.bezier = [fn.x1, fn.y1, fn.x2, fn.y2];
+			return out;
+		}
+	}
+	return undefined;
 }
 
 function isVectorLike(n: N): boolean {
@@ -425,11 +459,39 @@ async function ensureVar(id: string | undefined, ctx: Ctx): Promise<string | und
 		const v = await figma.variables.getVariableByIdAsync(id);
 		if (!v) return undefined;
 		const col = await figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId);
-		ctx.variables[id] = { name: v.name, collection: col?.name ?? '' };
+		const meta: VariableMeta = { name: v.name, collection: col ? col.name : '' };
+		if (col && col.modes.length > 1) {
+			const modes: { name: string; value: ModeValue }[] = [];
+			for (const mode of col.modes) {
+				const value = await resolveModeValue(v.valuesByMode[mode.modeId], mode.name, 0);
+				if (value !== undefined) modes.push({ name: mode.name, value: value });
+			}
+			meta.modes = modes;
+		}
+		ctx.variables[id] = meta;
 		return id;
 	} catch {
 		return undefined;
 	}
+}
+
+/** Follows aliases, preferring the mode with the same name in the aliased collection. */
+async function resolveModeValue(value: unknown, modeName: string, depth: number): Promise<ModeValue | undefined> {
+	if (value === null || value === undefined) return undefined;
+	if (typeof value !== 'object') return value as ModeValue;
+	const obj = value as N;
+	if (obj.type === 'VARIABLE_ALIAS') {
+		if (depth > 8) return undefined;
+		const target = await figma.variables.getVariableByIdAsync(obj.id);
+		if (!target) return undefined;
+		const col = await figma.variables.getVariableCollectionByIdAsync(target.variableCollectionId);
+		if (!col) return undefined;
+		let modeId = col.defaultModeId;
+		for (const m of col.modes) if (m.name === modeName) modeId = m.modeId;
+		return resolveModeValue(target.valuesByMode[modeId], modeName, depth + 1);
+	}
+	if (typeof obj.r === 'number') return { r: obj.r, g: obj.g, b: obj.b, a: typeof obj.a === 'number' ? obj.a : 1 };
+	return undefined;
 }
 
 async function readNodeVars(n: N, ctx: Ctx): Promise<Record<string, string>> {

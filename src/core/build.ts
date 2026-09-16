@@ -1,4 +1,4 @@
-import type { RawAutoLayout, RawNode, ReadResult } from '../shared/types';
+import type { RawAutoLayout, RawNode, RawTransition, ReadResult } from '../shared/types';
 import { mergeBreakpoint, mergeState, type MergeCtx } from './diff';
 import { effectStyle, strokeStyle } from './effects';
 import { isCommercial } from './fonts';
@@ -151,7 +151,7 @@ export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocumen
 
 	const length = (n: number) => px(n, opts.decimals, units);
 
-	const variableRef = (id: string, literal: string, raw: RawNode): string => {
+	const variableRef = (id: string, literal: string, raw: RawNode, kind: 'length' | 'color'): string => {
 		const meta = result.variables[id];
 		if (!opts.useVariables || !meta) return literal;
 		const existing = vars.get(id);
@@ -164,14 +164,27 @@ export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocumen
 		if (varNames.has(name)) name = `--${cssSlug(meta.collection)}-${cssSlug(meta.name)}`;
 		for (let i = 2; varNames.has(name); i++) name = `--${cssSlug(meta.name)}-${i}`;
 		varNames.add(name);
-		vars.set(id, { name, value: literal });
+		const variable: IRVariable = { name, value: literal };
+		const modes = (meta.modes ?? [])
+			.map((m) => {
+				const v = m.value;
+				if (kind === 'color' && typeof v === 'object') return { mode: m.name, value: cssColor(v) };
+				if (kind === 'length' && typeof v === 'number') return { mode: m.name, value: length(v) };
+				return null;
+			})
+			.filter((m): m is { mode: string; value: string } => m !== null && m.value !== literal);
+		if (modes.length) {
+			variable.collection = meta.collection;
+			variable.modes = modes;
+		}
+		vars.set(id, variable);
 		return `var(${name})`;
 	};
 
 	const makeCtx = (raw: RawNode, mode: Mode): StyleCtx => ({
 		px: length,
-		len: (n, varId) => (varId ? variableRef(varId, length(n), raw) : length(n)),
-		color: (c, varId) => (varId ? variableRef(varId, cssColor(c), raw) : cssColor(c)),
+		len: (n, varId) => (varId ? variableRef(varId, length(n), raw, 'length') : length(n)),
+		color: (c, varId) => (varId ? variableRef(varId, cssColor(c), raw, 'color') : cssColor(c)),
 		asset: (id) => `__ASSET__${id}__`,
 		warn: (code, detail) => {
 			if (mode !== 'silent') addWarning(raw.id, raw.name, code, detail);
@@ -348,7 +361,10 @@ export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocumen
 			irById.set(raw.id, node);
 			if (placeholderColor) rules.push({ target: node, pseudo: '::placeholder', style: { color: placeholderColor, opacity: '1' } });
 		}
-		if (control) return node;
+		if (control) {
+			if (attrs.placeholder || runs?.[0]?.text) attrs['aria-label'] = attrs.placeholder || runs![0].text;
+			return node;
+		}
 
 		const childInteractive = interactive || tag === 'button' || tag === 'a';
 		const list = tag === 'ul' || tag === 'ol';
@@ -371,14 +387,38 @@ export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocumen
 			} else node.children.push(ir);
 		}
 
+		if (mode === 'real') linkLabels(node);
+		if ((tag === 'button' || tag === 'a') && !runs && !hasText(node) && slugify(raw.name)) attrs['aria-label'] = raw.name;
+
 		if (mode === 'real' && raw.states) {
+			const start = rules.length;
 			for (const s of raw.states) {
 				const tree = buildNode(s.node, null, parentTag, interactive, 'silent');
 				if (tree) mergeState(node, tree, PSEUDO[s.state], rules);
 			}
+			transitions.push({ rules: rules.slice(start), transition: raw.stateTransition });
 		}
 		return node;
 	};
+
+	/** Ties each form control to the label layer right before it (or right after it). */
+	const linkLabels = (node: IRNode) => {
+		const kids = node.children.map((c) => (c.wrapper && c.children[0] ? c.children[0] : c));
+		kids.forEach((c, i) => {
+			if (!CONTROL_TAGS.has(c.tag)) return;
+			const label = [kids[i - 1], kids[i + 1]].find((k) => k?.tag === 'label' && !k.attrs.for);
+			if (!label) return;
+			let id = primaryClass(c) || 'field';
+			for (let n = 2; ids.has(id); n++) id = `${primaryClass(c) || 'field'}-${n}`;
+			ids.add(id);
+			c.attrs.id = id;
+			label.attrs.for = id;
+			delete c.attrs['aria-label'];
+		});
+	};
+
+	const transitions: { rules: IRRule[]; transition?: RawTransition }[] = [];
+	const ids = new Set<string>();
 
 	const fluidRoot = (node: IRNode, raw: RawNode) => {
 		node.style.width = '100%';
@@ -430,7 +470,6 @@ export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocumen
 	// Resolve prototype links now that every page and element exists.
 	const pageOf = new Map<IRNode, number>();
 	pages.forEach((p, i) => walk(p.roots, (n) => pageOf.set(n, i)));
-	const ids = new Set<string>();
 	pages.forEach((p) =>
 		walk(p.roots, (n) => {
 			const id = n.linkNodeId;
@@ -454,6 +493,9 @@ export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocumen
 		}),
 	);
 
+	// Added last so breakpoint diffs never see (and reset) the transition property.
+	for (const { rules: stateRules, transition } of transitions) applyTransition(stateRules, transition);
+
 	const fontList: FontUse[] = [];
 	for (const [family, use] of fonts) {
 		const sort = (s: Set<number>) => [...s].sort((a, b) => a - b);
@@ -473,6 +515,44 @@ export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocumen
 	};
 	if (opts.shareClasses) shareClasses(doc);
 	return doc;
+}
+
+const EASING: Record<string, string> = {
+	LINEAR: 'linear',
+	EASE_IN: 'ease-in',
+	EASE_OUT: 'ease-out',
+	EASE_IN_AND_OUT: 'ease-in-out',
+	EASE_IN_BACK: 'cubic-bezier(0.3, -0.05, 0.7, -0.5)',
+	EASE_OUT_BACK: 'cubic-bezier(0.45, 1.45, 0.8, 1)',
+	EASE_IN_AND_OUT_BACK: 'cubic-bezier(0.7, -0.4, 0.4, 1.4)',
+};
+
+/** Hover/focus/pressed rules animate like the Figma prototype (150ms ease-out when it sets nothing). */
+export function applyTransition(stateRules: IRRule[], transition?: RawTransition) {
+	if (transition && transition.duration <= 0) return;
+	const ms = transition ? Math.round(transition.duration * 1000) : 150;
+	const easing = !transition
+		? 'ease-out'
+		: transition.bezier
+			? `cubic-bezier(${transition.bezier.map((v) => num(v, 3)).join(', ')})`
+			: (EASING[transition.easing] ?? 'ease-out');
+	const props = new Map<IRNode, Set<string>>();
+	for (const r of stateRules) {
+		if (!r.scope || r.pseudo) continue;
+		const target = r.target.wrapper && r.target.children[0] ? r.target.children[0] : r.target;
+		const set = props.get(target) ?? new Set<string>();
+		for (const k of Object.keys(r.style)) if (k !== 'display') set.add(k);
+		props.set(target, set);
+	}
+	for (const [target, set] of props) {
+		if (set.size === 0) continue;
+		const list = set.size > 4 ? ['all'] : [...set];
+		target.style.transition = list.map((k) => `${k} ${ms}ms ${easing}`).join(', ');
+	}
+}
+
+function hasText(node: IRNode): boolean {
+	return node.children.some((c) => (c.runs?.length ?? 0) > 0 || !!c.attrs.alt || hasText(c));
 }
 
 function firstText(raw: RawNode): RawNode | undefined {

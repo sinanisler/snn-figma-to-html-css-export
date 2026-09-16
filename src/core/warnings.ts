@@ -36,6 +36,16 @@ const MESSAGES: Record<string, string> = {
 	FORM_CONTROL_SIMPLIFIED: 'Form control built from its first text layer — icons and extra layers inside were dropped.',
 	LINK_TARGET_OUTSIDE: 'Prototype link points to a frame outside the export — href="#" used.',
 	BREAKPOINT_CONTENT_DIFFERS: 'Text differs between breakpoint frames — the text of the largest frame is used.',
+	CHECK_NO_AUTO_LAYOUT: 'No Auto Layout — children are positioned absolutely. Add Auto Layout (Shift + A) for flexible code.',
+	CHECK_INFERRED_LAYOUT: 'No Auto Layout — rows and columns were guessed. Add Auto Layout to be sure.',
+	CHECK_GROUP: 'Group instead of frame — groups cannot use Auto Layout, so children are positioned absolutely.',
+	CHECK_ABSOLUTE_CHILDREN: 'Several children use "Ignore Auto Layout" (absolute position).',
+	CHECK_GENERIC_NAME: 'Default layer name — rename it so classes and tags are meaningful (e.g. "Header", "Card").',
+	CHECK_IMAGE_ALT: 'Image has a default layer name, so its alt text is empty. Name the layer to describe the image.',
+	CHECK_HEADING_SKIP: 'Heading level skipped — screen readers expect h1 → h2 → h3.',
+	CHECK_MULTIPLE_H1: 'More than one h1 on the page.',
+	AI_SECTION_FAILED: 'AI generation failed for this section — the standard output is used instead.',
+	AI_TEXT_CHANGED: 'AI output may have changed or dropped text in this section — compare with the design.',
 };
 
 export function describeWarning(code: string): string {

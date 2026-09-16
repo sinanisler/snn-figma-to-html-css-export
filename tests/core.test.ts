@@ -275,7 +275,7 @@ describe('semantics', () => {
 		expect(input.tag).toBe('input');
 		expect(input.attrs).toMatchObject({ type: 'email', placeholder: 'you@example.com' });
 		expect(input.style['font-size']).toBe('16px');
-		expect(markup(doc)).toContain('<input class="email-input" type="email" placeholder="you@example.com">');
+		expect(markup(doc)).toContain('<input class="email-input" type="email" placeholder="you@example.com" aria-label="you@example.com">');
 		expect(css(doc)).toContain('.email-input::placeholder {\n  color: #808080;\n  opacity: 1;\n}');
 	});
 
@@ -304,8 +304,8 @@ describe('prototype links', () => {
 		const doc = build(result([home, about]));
 		expect(doc.pages.map((p) => p.slug)).toEqual(['index', 'about']);
 		const html = markup(doc, { linkHref: (l) => (l.page !== undefined ? `${doc.pages[l.page].slug}.html` : l.url ?? '#') });
-		expect(html).toContain('<a class="docs" href="https://example.com" target="_blank" rel="noopener">');
-		expect(html).toContain('<a class="about-link" href="about.html">');
+		expect(html).toContain('<a class="docs" href="https://example.com" target="_blank" rel="noopener" aria-label="Docs">');
+		expect(html).toContain('<a class="about-link" aria-label="About link" href="about.html">');
 		expect(doc.warnings.some((w) => w.code === 'LINK_TARGET_OUTSIDE')).toBe(true);
 	});
 });

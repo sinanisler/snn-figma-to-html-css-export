@@ -12,10 +12,18 @@
 		{ "label": "React + CSS", "value": "react" },
 		{ "label": "React + Tailwind", "value": "react-tailwind" },
 		{ "label": "Vue + CSS", "value": "vue" },
-		{ "label": "Svelte + CSS", "value": "svelte" }
+		{ "label": "Vue + Tailwind", "value": "vue-tailwind" },
+		{ "label": "Svelte + CSS", "value": "svelte" },
+		{ "label": "Email HTML", "value": "email" }
 	],
 	"documentAccess": "dynamic-page",
 	"networkAccess": {
-		"allowedDomains": ["none"]
+		"allowedDomains": [
+			"https://openrouter.ai",
+			"https://fonts.googleapis.com",
+			"https://fonts.gstatic.com",
+			"https://cdn.jsdelivr.net"
+		],
+		"reasoning": "openrouter.ai is only contacted when the user adds their own OpenRouter API key and starts the optional AI rebuild. Google Fonts and the Tailwind browser build (cdn.jsdelivr.net) are loaded by the live preview so it matches the exported page."
 	}
 }

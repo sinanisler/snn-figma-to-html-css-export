@@ -127,6 +127,8 @@ export type RawNode = {
 	component?: { id: string; name: string };
 	/** Instances of a variant with State=Default: the Hover/Focus/Pressed siblings. */
 	states?: RawState[];
+	/** Prototype animation between the default variant and its states. */
+	stateTransition?: RawTransition;
 	/** Roots only: the node sits directly on the page. */
 	topLevel?: boolean;
 	children: RawNode[];
@@ -136,7 +138,17 @@ export type RawLink = { url?: string; nodeId?: string; newTab?: boolean };
 export type PseudoState = 'hover' | 'focus' | 'active';
 export type RawState = { state: PseudoState; node: RawNode };
 
-export type VariableMeta = { name: string; collection: string };
+/** duration in seconds; easing is a Figma easing type; bezier only for CUSTOM_CUBIC_BEZIER. */
+export type RawTransition = { duration: number; easing: string; bezier?: [number, number, number, number] };
+
+export type ModeValue = RGBA | number | string | boolean;
+
+export type VariableMeta = {
+	name: string;
+	collection: string;
+	/** Resolved value in every mode, when the collection has more than one. */
+	modes?: { name: string; value: ModeValue }[];
+};
 
 export type RawAsset = {
 	id: string;
@@ -177,6 +189,12 @@ export type Settings = {
 	shareClasses: boolean;
 	inlineSvg: boolean;
 	rasterScale: 1 | 2 | 3;
+	/** React/Vue/Svelte: Figma components become component files with props. */
+	components: boolean;
+	/** React/Vue/Svelte: TypeScript output. */
+	typescript: boolean;
+	/** A variable mode named "Dark" follows prefers-color-scheme. */
+	systemDarkMode: boolean;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -189,6 +207,32 @@ export const DEFAULT_SETTINGS: Settings = {
 	shareClasses: true,
 	inlineSvg: false,
 	rasterScale: 2,
+	components: true,
+	typescript: false,
+	systemDarkMode: false,
+};
+
+export type ReasoningEffort = 'default' | 'off' | 'low' | 'medium' | 'high';
+
+export type AiSettings = {
+	apiKey: string;
+	model: string;
+	reasoning: ReasoningEffort;
+	/** Sections generated at the same time. */
+	parallel: 1 | 2 | 3 | 4;
+	/** Attach a screenshot of each section (vision models only). */
+	screenshots: boolean;
+	/** Extra instructions appended to every section prompt. */
+	instructions: string;
+};
+
+export const DEFAULT_AI_SETTINGS: AiSettings = {
+	apiKey: '',
+	model: '~deepseek/deepseek-pro-latest',
+	reasoning: 'default',
+	parallel: 3,
+	screenshots: false,
+	instructions: '',
 };
 
 export type ReadOptions = {
@@ -230,11 +274,12 @@ export type TokensResult = {
 };
 
 export type MainToUi =
-	| { type: 'INIT'; settings: Settings; size: { w: number; h: number } }
+	| { type: 'INIT'; settings: Settings; ai: AiSettings; size: { w: number; h: number } }
 	| { type: 'SELECTION'; ids: string[]; names: string[] }
 	| { type: 'PROGRESS'; done: number; total: number }
 	| { type: 'RESULT'; result: ReadResult }
 	| { type: 'TOKENS'; tokens: TokensResult }
+	| { type: 'IMAGE'; requestId: number; bytes: Uint8Array | null }
 	| { type: 'ERROR'; message: string };
 
 export type UiToMain =
@@ -243,4 +288,7 @@ export type UiToMain =
 	| { type: 'FOCUS'; nodeId: string }
 	| { type: 'RESIZE'; w: number; h: number }
 	| { type: 'SAVE_SETTINGS'; settings: Settings }
+	| { type: 'SAVE_AI'; ai: AiSettings }
+	| { type: 'SCREENSHOT'; requestId: number; nodeId: string; maxWidth: number }
+	| { type: 'OPEN_URL'; url: string }
 	| { type: 'NOTIFY'; message: string };
