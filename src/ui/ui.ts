@@ -1130,8 +1130,7 @@ let tipTimer = 0;
 const hideTip = () => {
 	clearTimeout(tipTimer);
 	if (tipTarget?.dataset.tip !== undefined) {
-		// Keep a title the app set while the tooltip was open.
-		if (!tipTarget.hasAttribute('title')) tipTarget.title = tipTarget.dataset.tip;
+		tipTarget.title = tipTarget.dataset.tip;
 		delete tipTarget.dataset.tip;
 	}
 	tipTarget = null;
@@ -1160,3 +1159,12 @@ document.addEventListener('pointerout', (e) => {
 	if (tipTarget && !tipTarget.contains(e.relatedTarget as Node)) hideTip();
 });
 document.addEventListener('pointerdown', hideTip);
+// The app updates some titles on the fly; while hovered, move a new title into the tooltip instead of letting the native one show.
+new MutationObserver((records) => {
+	for (const { target } of records) {
+		if (target !== tipTarget || !tipTarget.title) continue;
+		tipTarget.dataset.tip = tipTarget.title;
+		tipTarget.removeAttribute('title');
+		tip.textContent = tipTarget.dataset.tip;
+	}
+}).observe(document.body, { attributes: true, attributeFilter: ['title'], subtree: true });

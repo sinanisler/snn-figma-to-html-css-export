@@ -617,6 +617,11 @@ input {
 	margin-top: 0;
 }
 
+/* Icons never become the hover target, so the button's tooltip handles them. */
+button svg {
+	pointer-events: none;
+}
+
 .tip {
 	position: fixed;
 	z-index: 100;
