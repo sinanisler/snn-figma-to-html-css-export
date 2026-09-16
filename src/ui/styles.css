@@ -393,12 +393,6 @@ input {
 	color: var(--figma-color-text-tertiary, #999);
 }
 
-.empty .hint {
-	margin-top: 8px;
-	max-width: 420px;
-	color: var(--figma-color-text-tertiary, #999);
-}
-
 .btn.ai {
 	display: inline-flex;
 	align-items: center;
@@ -621,4 +615,18 @@ input {
 
 .note-heading:first-child {
 	margin-top: 0;
+}
+
+.tip {
+	position: fixed;
+	z-index: 100;
+	max-width: 260px;
+	padding: 5px 8px;
+	border-radius: 4px;
+	background: var(--figma-color-bg-inverse, #1e1e1e);
+	color: var(--figma-color-text-oninverse, #fff);
+	font-size: 11px;
+	line-height: 1.4;
+	pointer-events: none;
+	box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
 }

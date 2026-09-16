@@ -58,8 +58,8 @@ app.innerHTML = `
 	<header class="bar">
 		<div class="selection" id="selection">Select a layer to export</div>
 		<select class="format" id="format" title="Output format" aria-label="Output format">${formatOptions}</select>
-		<button class="btn primary" id="generate" disabled title="Ctrl/⌘ + Enter">Generate</button>
-		<button class="btn ai" id="ai-generate" disabled title="Rebuild the page section by section with an AI model (OpenRouter)">${SPARKLE}<span>AI Generate</span></button>
+		<button class="btn primary" id="generate" disabled title="Convert the selection straight to code (Ctrl/⌘ + Enter). Select several top-level frames for a multi-page site; name them “Home / Desktop”, “Home / Mobile” to merge breakpoints.">Generate</button>
+		<button class="btn ai" id="ai-generate" disabled title="Rebuild the page section by section with an AI model (OpenRouter) into clean, responsive code. Best when the design has no Auto Layout.">${SPARKLE}<span>AI Generate</span></button>
 	</header>
 	<div class="bar sub">
 		<div class="tabs" id="tabs" role="tablist"></div>
@@ -71,9 +71,9 @@ app.innerHTML = `
 			<select class="page" id="page" title="Page" aria-label="Page" hidden></select>
 			<select class="theme" id="theme" title="Variable mode shown in the preview" aria-label="Theme" hidden></select>
 			<div class="devices" id="devices" hidden>${DEVICES.map((d) => `<button data-width="${d.width}" title="${d.width ? `${d.width}px wide` : 'Fit the panel'}">${d.label}</button>`).join('')}</div>
-			<button class="btn" id="copy" disabled>Copy</button>
+			<button class="btn" id="copy" disabled title="Copy the open file to the clipboard">Copy</button>
 			<div class="menu-wrap">
-				<button class="btn" id="download" aria-haspopup="true" aria-expanded="false">Download ▾</button>
+				<button class="btn" id="download" title="Download files, a starter project or design tokens" aria-haspopup="true" aria-expanded="false">Download ▾</button>
 				<div class="menu" id="menu" hidden>
 					<button data-dl="zip" disabled>Files (.zip)<small>Pages, stylesheet and assets</small></button>
 					<button data-dl="starter" disabled>Vite project<small>npm install &amp;&amp; npm run dev</small></button>
@@ -113,8 +113,8 @@ app.innerHTML = `
 			<label class="wide">OpenRouter API key
 				<span class="row">
 					<input type="password" id="ai-key" placeholder="sk-or-v1-…" autocomplete="off" spellcheck="false">
-					<button class="btn" id="ai-key-show" type="button">Show</button>
-					<button class="btn" id="ai-key-check" type="button">Check</button>
+					<button class="btn" id="ai-key-show" type="button" title="Show or hide the key">Show</button>
+					<button class="btn" id="ai-key-check" type="button" title="Test the key and show the remaining credit">Check</button>
 				</span>
 				<small id="ai-key-status"><a href="#" data-url="https://openrouter.ai/keys">Get a key</a> · Saved only in this Figma app on this computer.</small>
 			</label>
@@ -152,16 +152,14 @@ app.innerHTML = `
 			<p><button class="btn ai" id="ai-empty-generate" type="button">✦ AI Generate</button></p>
 		</div>
 		<div class="empty" id="empty">
-			<p><strong>Select a frame, then press Generate.</strong></p>
-			<p>Select several top-level frames for a multi-page site.<br>Name them “Home / Desktop”, “Home / Mobile” to merge breakpoints.</p>
-			<p class="hint">No Auto Layout in your design? Layers will be positioned absolutely — use <strong>AI</strong> to rebuild it as responsive code.</p>
+			<p>Select a frame, then press <strong>Generate</strong> or <strong>AI Generate</strong>.</p>
 		</div>
 	</main>
 	<section class="ai-run" id="ai-run" hidden>
 		<div class="ai-run-head">
 			<button class="notes-head" id="ai-run-toggle" aria-expanded="true"><span id="ai-run-title">AI</span><span class="chev">▾</span></button>
-			<button class="btn small" id="ai-cancel" hidden>Cancel</button>
-			<button class="btn small" id="ai-regen">Regenerate all</button>
+			<button class="btn small" id="ai-cancel" title="Stop the sections still running" hidden>Cancel</button>
+			<button class="btn small" id="ai-regen" title="Run the AI rebuild again for every section">Regenerate all</button>
 		</div>
 		<div class="ai-run-body" id="ai-run-body"></div>
 	</section>
@@ -512,7 +510,7 @@ function setMenuState() {
 	els.aiGenerate.title =
 		settings.format === 'email'
 			? 'AI rebuild is not available for email HTML'
-			: 'Rebuild the page section by section with an AI model (OpenRouter)';
+			: 'Rebuild the page section by section with an AI model (OpenRouter) into clean, responsive code. Best when the design has no Auto Layout.';
 }
 
 function renderSource() {
@@ -558,7 +556,7 @@ function renderAll() {
 	const bytes = assetBytes();
 	const heavy = settings.inlineImages && (bytes > ZIP_RECOMMEND_BYTES || assets.size > ZIP_RECOMMEND_COUNT);
 	els.download.classList.toggle('primary', heavy);
-	els.copy.title = heavy ? `Copying embeds all ${assets.size} images as base64 (${formatBytes(bytes)}) — Download the .zip for separate asset files` : '';
+	els.copy.title = heavy ? `Copying embeds all ${assets.size} images as base64 (${formatBytes(bytes)}) — Download the .zip for separate asset files` : 'Copy the open file to the clipboard';
 	renderStatus();
 }
 
@@ -1121,3 +1119,44 @@ els.resize.addEventListener('pointerdown', (e) => {
 	els.resize.addEventListener('pointermove', move);
 	els.resize.addEventListener('pointerup', up);
 });
+
+// Styled tooltips for anything with a title. The title moves to data-tip while hovered so the native one never shows.
+const tip = document.createElement('div');
+tip.className = 'tip';
+tip.hidden = true;
+document.body.append(tip);
+let tipTarget: HTMLElement | null = null;
+let tipTimer = 0;
+const hideTip = () => {
+	clearTimeout(tipTimer);
+	if (tipTarget?.dataset.tip !== undefined) {
+		// Keep a title the app set while the tooltip was open.
+		if (!tipTarget.hasAttribute('title')) tipTarget.title = tipTarget.dataset.tip;
+		delete tipTarget.dataset.tip;
+	}
+	tipTarget = null;
+	tip.hidden = true;
+};
+document.addEventListener('pointerover', (e) => {
+	const el = (e.target as Element).closest<HTMLElement>('[title]');
+	if (el === tipTarget || (el && el.contains(tipTarget))) return;
+	hideTip();
+	if (!el?.title) return;
+	tipTarget = el;
+	el.dataset.tip = el.title;
+	el.removeAttribute('title');
+	tipTimer = window.setTimeout(() => {
+		tip.textContent = el.dataset.tip ?? '';
+		tip.hidden = false;
+		const box = el.getBoundingClientRect();
+		const w = tip.offsetWidth;
+		const h = tip.offsetHeight;
+		const below = box.bottom + 6 + h <= window.innerHeight;
+		tip.style.top = `${below ? box.bottom + 6 : box.top - 6 - h}px`;
+		tip.style.left = `${Math.max(6, Math.min(box.left + box.width / 2 - w / 2, window.innerWidth - w - 6))}px`;
+	}, 400);
+});
+document.addEventListener('pointerout', (e) => {
+	if (tipTarget && !tipTarget.contains(e.relatedTarget as Node)) hideTip();
+});
+document.addEventListener('pointerdown', hideTip);
