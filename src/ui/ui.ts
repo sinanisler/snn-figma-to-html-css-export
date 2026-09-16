@@ -1120,30 +1120,53 @@ els.resize.addEventListener('pointerdown', (e) => {
 	els.resize.addEventListener('pointerup', up);
 });
 
-// Styled tooltips for anything with a title. The title moves to data-tip while hovered so the native one never shows.
+// Styled tooltips. Every title attribute is moved to data-tip as soon as it appears, so the native tooltip never shows.
 const tip = document.createElement('div');
 tip.className = 'tip';
 tip.hidden = true;
 document.body.append(tip);
 let tipTarget: HTMLElement | null = null;
 let tipTimer = 0;
+// Elements whose title we just removed, so that removal is not mistaken for the app clearing the title.
+const stripped = new WeakSet<Element>();
+const moveTitle = (el: Element) => {
+	if (!(el instanceof HTMLElement) || !el.hasAttribute('title')) return;
+	if (el.title) el.dataset.tip = el.title;
+	else delete el.dataset.tip;
+	stripped.add(el);
+	el.removeAttribute('title');
+	if (el === tipTarget) {
+		if (el.dataset.tip) tip.textContent = el.dataset.tip;
+		else hideTip();
+	}
+};
 const hideTip = () => {
 	clearTimeout(tipTimer);
-	if (tipTarget?.dataset.tip !== undefined) {
-		tipTarget.title = tipTarget.dataset.tip;
-		delete tipTarget.dataset.tip;
-	}
 	tipTarget = null;
 	tip.hidden = true;
 };
+for (const el of document.querySelectorAll('[title]')) moveTitle(el);
+new MutationObserver((records) => {
+	for (const r of records) {
+		if (r.type === 'childList') {
+			for (const node of r.addedNodes) {
+				if (!(node instanceof Element)) continue;
+				moveTitle(node);
+				for (const el of node.querySelectorAll('[title]')) moveTitle(el);
+			}
+		} else if (r.target instanceof HTMLElement) {
+			if (r.target.hasAttribute('title')) moveTitle(r.target);
+			else if (stripped.has(r.target)) stripped.delete(r.target);
+			else delete r.target.dataset.tip;
+		}
+	}
+}).observe(document.body, { attributes: true, attributeFilter: ['title'], childList: true, subtree: true });
 document.addEventListener('pointerover', (e) => {
-	const el = (e.target as Element).closest<HTMLElement>('[title]');
-	if (el === tipTarget || (el && el.contains(tipTarget))) return;
+	const el = (e.target as Element).closest<HTMLElement>('[data-tip]');
+	if (el === tipTarget) return;
 	hideTip();
-	if (!el?.title) return;
+	if (!el) return;
 	tipTarget = el;
-	el.dataset.tip = el.title;
-	el.removeAttribute('title');
 	tipTimer = window.setTimeout(() => {
 		tip.textContent = el.dataset.tip ?? '';
 		tip.hidden = false;
@@ -1159,12 +1182,3 @@ document.addEventListener('pointerout', (e) => {
 	if (tipTarget && !tipTarget.contains(e.relatedTarget as Node)) hideTip();
 });
 document.addEventListener('pointerdown', hideTip);
-// The app updates some titles on the fly; while hovered, move a new title into the tooltip instead of letting the native one show.
-new MutationObserver((records) => {
-	for (const { target } of records) {
-		if (target !== tipTarget || !tipTarget.title) continue;
-		tipTarget.dataset.tip = tipTarget.title;
-		tipTarget.removeAttribute('title');
-		tip.textContent = tipTarget.dataset.tip;
-	}
-}).observe(document.body, { attributes: true, attributeFilter: ['title'], subtree: true });
