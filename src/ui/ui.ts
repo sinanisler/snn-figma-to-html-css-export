@@ -169,7 +169,7 @@ app.innerHTML = `
 	</section>
 	<footer class="statusbar">
 		<span class="status" id="status">Ready</span>
-		<span class="credit">Made by <a href="#" data-url="https://www.linkedin.com/in/sinanisler/" title="Visit @sinanisler">@sinanisler</a> · <a href="#" data-url="https://github.com/sinanisler/snn-figma-to-html-css-export" title="View the source code on GitHub">Source</a> · <a href="#" data-url="https://github.com/sinanisler/snn-figma-to-html-css-export/issues" title="Report a bug on GitHub Issues">Report issue</a> · <a href="#" data-url="https://github.com/sinanisler/snn-figma-to-html-css-export/discussions" title="Suggest a feature on GitHub Discussions">Request feature</a></span>
+		<span class="credit">Made by <a href="#" data-url="https://x.com/intent/user?screen_name=sinanisler" title="Visit @sinanisler">@sinanisler</a> · <a href="#" data-url="https://github.com/sinanisler/snn-figma-to-html-css-export" title="View the source code on GitHub">Source</a> · <a href="#" data-url="https://github.com/sinanisler/snn-figma-to-html-css-export/issues" title="Report a bug on GitHub Issues">Report issue</a> · <a href="#" data-url="https://github.com/sinanisler/snn-figma-to-html-css-export/discussions" title="Suggest a feature on GitHub Discussions">Request feature</a></span>
 	</footer>
 	<div class="resize" id="resize" title="Drag to resize"></div>
 </div>`;
