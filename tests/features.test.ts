@@ -325,6 +325,8 @@ describe('AI rebuild', () => {
 		expect(messages[0].content).toContain('Use a 1200px container');
 		expect(user[0].text).not.toContain('Use a 1200px container');
 		expect(user[1]).toMatchObject({ type: 'image_url' });
+		expect(user[0].text).toContain('Layout context from the Figma file');
+		expect(user[0].text).toContain('All sections of this page, top to bottom');
 	});
 
 	it('parses model answers and strips unsafe parts', () => {

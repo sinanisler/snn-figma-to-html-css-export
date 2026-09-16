@@ -346,6 +346,7 @@ export function buildDocument(result: ReadResult, opts: BuildOptions): IRDocumen
 		if (tag === 'button') attrs.type = 'button';
 
 		const node: IRNode = { id: raw.id, name: raw.name, tag, className: cls, shared: [], style, attrs, children: [] };
+		if (mode === 'real') node.box = { x: raw.x, y: raw.y, width: raw.width, height: raw.height };
 		if (runs) {
 			node.runs = runs;
 			node.wrapRuns = wrapRuns;

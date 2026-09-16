@@ -4,6 +4,8 @@ import type { IRDocument } from '../core/ir';
 import type { AiSettings } from '../shared/types';
 import { streamChat } from './openrouter';
 
+const PAGE_SCREENSHOT_WIDTH = 512;
+
 export type SectionStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 
 export type SectionState = {
@@ -34,7 +36,7 @@ export type RunOptions = {
 	states: Map<string, SectionState>;
 	onUpdate: (state: SectionState) => void;
 	/** JPG data URL of a layer, or null. */
-	screenshot: (layerId: string) => Promise<string | null>;
+	screenshot: (layerId: string, maxWidth?: number) => Promise<string | null>;
 };
 
 export function initialState(s: SectionPlan): SectionState {
@@ -50,6 +52,15 @@ export async function runSections(opts: RunOptions): Promise<void> {
 		opts.onUpdate(state);
 	}
 
+	// One small overview shot per page, shared by its sections.
+	const pageShots = new Map<number, Promise<string | null>>();
+	const pageShot = (page: number) => {
+		const id = opts.doc.pages[page]?.roots[0]?.id;
+		if (!id) return Promise.resolve(null);
+		if (!pageShots.has(page)) pageShots.set(page, opts.screenshot(id, PAGE_SCREENSHOT_WIDTH));
+		return pageShots.get(page)!;
+	};
+
 	const one = async (section: SectionPlan) => {
 		const state = opts.states.get(section.key)!;
 		if (opts.signal.aborted) {
@@ -63,7 +74,8 @@ export async function runSections(opts: RunOptions): Promise<void> {
 		try {
 			const plan = opts.plans[section.page];
 			const screenshot = opts.ai.screenshots && section.layerIds.length === 1 ? await opts.screenshot(section.layerIds[0]) : null;
-			const messages = sectionMessages(section, { doc: opts.doc, plan, styling: opts.styling, instructions: opts.ai.instructions, screenshot });
+			const pageScreenshot = opts.ai.screenshots && plan.sections.length > 1 ? await pageShot(section.page) : null;
+			const messages = sectionMessages(section, { doc: opts.doc, plan, styling: opts.styling, instructions: opts.ai.instructions, screenshot, pageScreenshot });
 			const answer = await streamChat({
 				apiKey: opts.ai.apiKey,
 				model: opts.ai.model,

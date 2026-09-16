@@ -49,6 +49,10 @@ export type SectionPlan = {
 	css: string;
 	/** Words that should survive the rewrite. */
 	words: string[];
+	/** Where the section sits on the page and how its parent lays it out, for the model. */
+	layout: string[];
+	/** Page-relative box of the section's layers. */
+	box?: { x: number; y: number; width: number; height: number };
 };
 
 export type PlanNode =
@@ -121,6 +125,50 @@ export function planPages(doc: IRDocument, opts: PlanOptions): PagePlan[] {
 
 	return doc.pages.map((page, pageIndex) => {
 		const sections: SectionPlan[] = [];
+		const root = page.roots[0];
+		const pageWidth = root?.box?.width || len(root?.style.width) || 1440;
+		/** Layer boxes relative to the page frame. */
+		const boxes = new Map<IRNode, { x: number; y: number; width: number; height: number }>();
+		const place = (n: IRNode, ox: number, oy: number, isRoot: boolean) => {
+			const x = isRoot ? 0 : ox + (n.box?.x ?? 0);
+			const y = isRoot ? 0 : oy + (n.box?.y ?? 0);
+			if (n.box) boxes.set(n, { x, y, width: n.box.width, height: n.box.height });
+			for (const c of n.children) place(c, n.box ? x : ox, n.box ? y : oy, false);
+		};
+		for (const r of page.roots) place(r, 0, 0, true);
+
+		const boxOf = (nodes: IRNode[]) => {
+			const list = nodes.map((n) => boxes.get(n)).filter((b) => !!b);
+			if (!list.length) return undefined;
+			const x = Math.min(...list.map((b) => b.x));
+			const y = Math.min(...list.map((b) => b.y));
+			return { x, y, width: Math.max(...list.map((b) => b.x + b.width)) - x, height: Math.max(...list.map((b) => b.y + b.height)) - y };
+		};
+
+		const describe = (nodes: IRNode[], parent: IRNode | null): string[] => {
+			const box = boxOf(nodes);
+			if (!box) return [];
+			const { x, y, width: w, height: h } = box;
+			const r = Math.round;
+			const share = w / pageWidth;
+			const lines = [
+				`Box on the page: x ${r(x)}, y ${r(y)}, ${r(w)}×${r(h)}px — ${r(share * 100)}% of the ${r(pageWidth)}px page width, ${r(x)}px from the left and ${r(pageWidth - x - w)}px from the right edge.`,
+			];
+			if (share >= 0.9) lines.push('It spans (almost) the whole page width: build it full width; if the design shows side gaps, treat them as page padding.');
+			else if (Math.abs(x - (pageWidth - x - w)) <= Math.max(8, pageWidth * 0.02)) lines.push('It is horizontally centered on the page.');
+			if (parent) {
+				const ps = mergedStyle(doc, parent);
+				const flow = ps.display === 'flex' || ps.display === 'grid';
+				const keys = ['display', 'flex-direction', 'align-items', 'justify-content', 'gap', 'padding'];
+				const desc = keys.filter((k) => ps[k]).map((k) => `${k}: ${ps[k]}`).join('; ');
+				lines.push(
+					flow
+						? `Parent layer "${parent.name}" lays out its children with ${desc}.`
+						: `Parent layer "${parent.name}" is a free canvas (children placed at absolute positions)${desc ? ` — ${desc}` : ''}.`,
+				);
+			}
+			return lines;
+		};
 		const input = (nodes: IRNode[]) => {
 			const html = renderNodes(doc, nodes, {
 				assets: opts.assets,
@@ -131,7 +179,7 @@ export function planPages(doc: IRDocument, opts: PlanOptions): PagePlan[] {
 			return { html, css: ruleBlocks(doc, resolve, nodes).join('\n\n') };
 		};
 
-		const section = (nodes: IRNode[]): PlanNode => {
+		const section = (nodes: IRNode[], parent: IRNode | null): PlanNode => {
 			const { html, css } = input(nodes);
 			const label = nodes.map((n) => n.name).join(' + ');
 			const base = cssSlug(primaryClass(nodes[0]) || nodes[0].name, 'section').slice(0, 24).replace(/-+$/, '');
@@ -150,6 +198,8 @@ export function planPages(doc: IRDocument, opts: PlanOptions): PagePlan[] {
 				html,
 				css,
 				words: textWords(nodes),
+				layout: describe(nodes, parent),
+				box: boxOf(nodes),
 			};
 			sections.push(plan);
 			return { kind: 'section', section: plan };
@@ -209,7 +259,7 @@ export function planPages(doc: IRDocument, opts: PlanOptions): PagePlan[] {
 
 			return clusters.map((cluster) => {
 				if (cluster.length === 1 && cluster[0].children.length === 0) return { kind: 'static', node: cluster[0] } as PlanNode;
-				if (cluster.length > 1 || size(cluster) <= limit) return section(cluster);
+				if (cluster.length > 1 || size(cluster) <= limit) return section(cluster, parent);
 				return wrapper(cluster[0]);
 			});
 		};
@@ -222,9 +272,9 @@ export function planPages(doc: IRDocument, opts: PlanOptions): PagePlan[] {
 			const tall = Math.max(len(style.height), len(style['min-height'])) >= PAGE_HEIGHT;
 			const blocks = root.children.filter((c) => c.children.length > 0 || (c.wrapper && c.children[0]?.children.length)).length;
 			if (tall && blocks >= 2) return wrapper(root);
-			return size([root]) <= limit ? section([root]) : wrapper(root);
+			return size([root]) <= limit ? section([root], null) : wrapper(root);
 		});
-		const width = len(page.roots[0]?.style.width) || len(page.roots[0]?.style['min-width']) || 1440;
+		const width = pageWidth;
 		return { page: pageIndex, name: page.name, width, roots, sections };
 	});
 }
@@ -238,6 +288,8 @@ export type PromptContext = {
 	instructions?: string;
 	/** data: URL of a JPG screenshot of the section. */
 	screenshot?: string | null;
+	/** data: URL of a small JPG of the whole page, when the section is only part of it. */
+	pageScreenshot?: string | null;
 };
 
 export type ChatMessage = {
@@ -262,6 +314,7 @@ Rules:
 - Keep every visible text exactly as given — same words, same order. Do not invent, translate, shorten or drop content.
 - Keep every image src, alt text and link href exactly as given. Do not add external images, fonts, icons or scripts.
 - Match colors, font families, font sizes, weights, line heights, spacing, radii, borders and shadows of the input at the design width.
+- The input is a literal export and designers are not always tidy: layer names, stray offsets, fixed pixel sizes and odd nesting are accidents. Use the layout context and screenshots to understand what the design is meant to be (full-width band, centered container, card grid, split columns…) and build that intent, not the quirks.
 - Use the CSS custom properties from the input (var(--…)) instead of repeating their values.
 - Use semantic HTML (header, nav, main content sections, ul/li for lists, button for actions, a for links, h1–h6 matching the input's heading levels) and make it accessible (alt text, labels, aria-label on icon-only controls, visible focus styles).
 ${styleRules}
@@ -295,19 +348,28 @@ export function sectionMessages(section: SectionPlan, ctx: PromptContext): ChatM
 		`Output: HTML + ${styling === 'tailwind' ? 'Tailwind CSS v4' : 'plain CSS'}.`,
 		`Class prefix: "${section.prefix}".`,
 	];
+	if (section.layout.length) lines.push(`Layout context from the Figma file:\n${section.layout.map((l) => `- ${l}`).join('\n')}`);
+	if (plan.sections.length > 1) {
+		const outline = [...plan.sections]
+			.sort((a, b) => (a.box?.y ?? 0) - (b.box?.y ?? 0))
+			.map((s) => {
+				const box = s.box ? ` — y ${Math.round(s.box.y)}, ${Math.round(s.box.width)}×${Math.round(s.box.height)}px` : '';
+				return `- "${s.label}"${box}${s === section ? '  ← this one' : ''}`;
+			});
+		lines.push(`All sections of this page, top to bottom as they appear visually:\n${outline.join('\n')}`);
+	}
 	if (doc.fonts.length) lines.push(`Fonts already loaded: ${doc.fonts.map((f) => f.family).join(', ')}.`);
 	if (vars.length) lines.push(`CSS custom properties available:\n${vars.map((v) => `${v.name}: ${v.value};`).join('\n')}`);
 	if (doc.media.length && section.css.includes('@media'))
 		lines.push('The input CSS already has @media rules taken from the designer\'s smaller breakpoint frames — keep that behaviour.');
 	if (ctx.screenshot) lines.push('A screenshot of the section as designed is attached.');
+	if (ctx.pageScreenshot) lines.push('A small screenshot of the whole page is attached too, for context only — rebuild just this section.');
 	lines.push(`Input HTML:\n\`\`\`html\n${section.html}\n\`\`\``);
 	lines.push(`Input CSS:\n\`\`\`css\n${section.css || '/* none */'}\n\`\`\``);
 	const text = lines.join('\n\n');
-	const content: ChatMessage['content'] = ctx.screenshot
-		? [
-				{ type: 'text', text },
-				{ type: 'image_url', image_url: { url: ctx.screenshot } },
-			]
+	const images = [ctx.screenshot, ctx.pageScreenshot].filter((u): u is string => !!u);
+	const content: ChatMessage['content'] = images.length
+		? [{ type: 'text', text }, ...images.map((url) => ({ type: 'image_url' as const, image_url: { url } }))]
 		: text;
 	return [
 		{ role: 'system', content: systemPrompt(styling, ctx.instructions) },

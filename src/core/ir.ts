@@ -26,6 +26,8 @@ export type IRNode = {
 	linkNodeId?: string;
 	/** Classless <li> added around list children (display: contents). */
 	wrapper?: boolean;
+	/** Layer box in px, relative to the parent layer (Figma geometry, before any CSS). */
+	box?: { x: number; y: number; width: number; height: number };
 	componentKey?: string;
 	componentName?: string;
 	textStyle?: string;

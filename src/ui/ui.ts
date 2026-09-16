@@ -626,7 +626,7 @@ function downloadTokens(tokens: TokensResult) {
 const screenshotRequests = new Map<number, (bytes: Uint8Array | null) => void>();
 let screenshotSeq = 0;
 
-function screenshot(layerId: string): Promise<string | null> {
+function screenshot(layerId: string, maxWidth = SCREENSHOT_WIDTH): Promise<string | null> {
 	const requestId = ++screenshotSeq;
 	return new Promise((resolve) => {
 		const timer = setTimeout(() => {
@@ -637,7 +637,7 @@ function screenshot(layerId: string): Promise<string | null> {
 			clearTimeout(timer);
 			resolve(bytes && bytes.length ? `data:image/jpeg;base64,${toBase64(bytes)}` : null);
 		});
-		send({ type: 'SCREENSHOT', requestId, nodeId: layerId, maxWidth: SCREENSHOT_WIDTH });
+		send({ type: 'SCREENSHOT', requestId, nodeId: layerId, maxWidth });
 	});
 }
 
