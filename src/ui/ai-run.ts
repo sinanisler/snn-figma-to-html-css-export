@@ -77,7 +77,7 @@ export async function runSections(opts: RunOptions): Promise<void> {
 			const pageScreenshot = plan.sections.length > 1 ? await pageShot(section.page) : null;
 			const messages = sectionMessages(section, { doc: opts.doc, plan, styling: opts.styling, instructions: opts.ai.instructions, screenshot, pageScreenshot });
 			const answer = await streamChat({
-				apiKey: opts.ai.apiKey,
+				token: opts.ai.token,
 				model: opts.ai.model,
 				messages,
 				reasoning: opts.ai.reasoning,

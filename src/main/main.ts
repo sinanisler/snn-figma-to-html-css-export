@@ -12,7 +12,12 @@ async function loadSettings(): Promise<Settings> {
 }
 
 async function loadAi(): Promise<AiSettings> {
-	const saved = (await figma.clientStorage.getAsync('ai')) as Partial<AiSettings> | undefined;
+	const saved = (await figma.clientStorage.getAsync('ai')) as (Partial<AiSettings> & { apiKey?: string }) | undefined;
+	if (saved && 'apiKey' in saved) {
+		// Older versions stored the user's OpenRouter key here; AI now goes through the SNN account.
+		delete saved.apiKey;
+		await figma.clientStorage.setAsync('ai', saved);
+	}
 	return { ...DEFAULT_AI_SETTINGS, ...saved };
 }
 
