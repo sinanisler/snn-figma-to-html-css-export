@@ -19,11 +19,11 @@
 	"documentAccess": "dynamic-page",
 	"networkAccess": {
 		"allowedDomains": [
-			"https://snn.is",
+			"https://openrouter.ai",
 			"https://fonts.googleapis.com",
 			"https://fonts.gstatic.com",
 			"https://cdn.jsdelivr.net"
 		],
-		"reasoning": "snn.is is the publisher's AI service: it is contacted only when the user connects their SNN account and starts the optional AI rebuild; it forwards the section data and frame screenshots to OpenRouter. Google Fonts and the Tailwind browser build (cdn.jsdelivr.net) are loaded by the live preview so it matches the exported page."
+		"reasoning": "openrouter.ai is only contacted when the user adds their own OpenRouter API key and starts the optional AI rebuild. Google Fonts and the Tailwind browser build (cdn.jsdelivr.net) are loaded by the live preview so it matches the exported page."
 	}
 }

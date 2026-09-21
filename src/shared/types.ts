@@ -215,8 +215,7 @@ export const DEFAULT_SETTINGS: Settings = {
 export type ReasoningEffort = 'default' | 'off' | 'low' | 'medium' | 'high';
 
 export type AiSettings = {
-	/** Token for the SNN account service (not a provider key). */
-	token: string;
+	apiKey: string;
 	model: string;
 	reasoning: ReasoningEffort;
 	/** Sections generated at the same time. */
@@ -226,7 +225,7 @@ export type AiSettings = {
 };
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
-	token: '',
+	apiKey: '',
 	model: 'deepseek/deepseek-v4.1-flash',
 	reasoning: 'default',
 	parallel: 3,

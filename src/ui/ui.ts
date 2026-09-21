@@ -31,7 +31,7 @@ import {
 } from '../shared/types';
 import { initialState, runSections, type SectionState } from './ai-run';
 import { copyText, downloadZip } from './export';
-import { accountInfo, disconnect, listModels, OpenRouterError, SERVICE, startPairing, waitForPairing } from './openrouter';
+import { checkKey, listModels } from './openrouter';
 import { createViewer } from './viewer';
 
 const ZIP_RECOMMEND_BYTES = 2_000_000;
@@ -110,15 +110,14 @@ app.innerHTML = `
 	<div class="ai-panel" id="ai-panel" hidden>
 		<p class="ai-intro"><strong>Why AI?</strong> Figma is a free canvas: every layer that isn't inside Auto Layout sits at an absolute position. The standard export reproduces the design faithfully, so it keeps those fixed sizes and positions. For cleaner, responsive code, an AI model can rebuild the page <em>section by section</em> — small pieces it can get right, instead of one huge page it can't.</p>
 		<div class="ai-grid">
-			<div class="wide field">
-				<span>SNN account</span>
+			<label class="wide">OpenRouter API key
 				<span class="row">
-					<span class="account" id="ai-account">Not connected</span>
-					<button class="btn" id="ai-connect" type="button" title="Sign in to your SNN account in the browser">Connect account</button>
-					<button class="btn" id="ai-disconnect" type="button" title="Sign this plugin out of your SNN account" hidden>Disconnect</button>
+					<input type="password" id="ai-key" placeholder="sk-or-v1-…" autocomplete="off" spellcheck="false">
+					<button class="btn" id="ai-key-show" type="button" title="Show or hide the key">Show</button>
+					<button class="btn" id="ai-key-check" type="button" title="Test the key and show the remaining credit">Check</button>
 				</span>
-				<small id="ai-account-status">AI runs through your free account at snn.is, where your OpenRouter key is kept. <a href="#" data-url="${SERVICE}/index.php">Open dashboard</a></small>
-			</div>
+				<small id="ai-key-status"><a href="#" data-url="https://openrouter.ai/keys">Get a key</a> · Saved only in this Figma app on this computer.</small>
+			</label>
 			<label class="wide">Model
 				<input id="ai-model" list="ai-models" spellcheck="false" autocomplete="off">
 				<datalist id="ai-models"></datalist>
@@ -142,7 +141,7 @@ app.innerHTML = `
 				<small>Added to the built-in system prompt for every section — tune it per project. Saved automatically.</small>
 			</label>
 		</div>
-		<p class="ai-privacy">Optional. When you run AI, each section's design data, generated HTML/CSS and screenshots of the selected frames are sent through snn.is to OpenRouter and the model provider you pick. snn.is forwards them without keeping them. <a href="#" data-url="${SERVICE}/privacy.php">Privacy</a></p>
+		<p class="ai-privacy">Optional. Your key is sent only to openrouter.ai. Each section's generated HTML, CSS and screenshots go to OpenRouter and the model provider you pick; usage is billed to your OpenRouter account.</p>
 	</div>
 	<main class="editor-wrap">
 		<div class="editor" id="editor"></div>
@@ -205,10 +204,10 @@ const els = {
 	inline: $<HTMLInputElement>('opt-inline'),
 	wrap: $<HTMLInputElement>('opt-wrap'),
 	aiPanel: $('ai-panel'),
-	aiAccount: $('ai-account'),
-	aiConnect: $<HTMLButtonElement>('ai-connect'),
-	aiDisconnect: $<HTMLButtonElement>('ai-disconnect'),
-	aiAccountStatus: $('ai-account-status'),
+	aiKey: $<HTMLInputElement>('ai-key'),
+	aiKeyShow: $<HTMLButtonElement>('ai-key-show'),
+	aiKeyCheck: $<HTMLButtonElement>('ai-key-check'),
+	aiKeyStatus: $('ai-key-status'),
 	aiModel: $<HTMLInputElement>('ai-model'),
 	aiModels: $('ai-models'),
 	aiReasoning: $<HTMLSelectElement>('ai-reasoning'),
@@ -613,7 +612,7 @@ function applySettingsToForm() {
 }
 
 function applyAiToForm() {
-	renderAccount();
+	els.aiKey.value = ai.apiKey;
 	els.aiModel.value = ai.model;
 	els.aiReasoning.value = ai.reasoning;
 	els.aiParallel.value = String(ai.parallel);
@@ -669,69 +668,10 @@ function screenshot(layerId: string, maxWidth = SCREENSHOT_WIDTH): Promise<strin
 	});
 }
 
-function openAiPanel(focusConnect = false) {
+function openAiPanel(focusKey = false) {
 	els.aiPanel.hidden = false;
 	els.aiToggle.setAttribute('aria-expanded', 'true');
-	if (focusConnect) els.aiConnect.focus();
-}
-
-let pairing: AbortController | null = null;
-
-/** Shows the connection state; with a token, fetches the account's email, plan and usage. */
-function renderAccount(status?: string) {
-	const connected = !!ai.token;
-	els.aiAccount.textContent = connected ? 'Connected' : 'Not connected';
-	els.aiConnect.hidden = connected;
-	els.aiDisconnect.hidden = !connected;
-	els.aiConnect.textContent = pairing ? 'Cancel' : 'Connect account';
-	if (status) els.aiAccountStatus.textContent = status;
-	if (!connected) return;
-	accountInfo(ai.token)
-		.then((acc) => {
-			if (!ai.token) return;
-			const limit = acc.plan.daily_limit ? ` · ${acc.usage.today}/${acc.plan.daily_limit} today` : '';
-			els.aiAccount.textContent = `${acc.email} · ${acc.plan.name}${limit}`;
-			const ready = acc.providers.some((p) => p.ready);
-			if (!ready) els.aiAccountStatus.textContent = acc.plan.managed ? 'AI is temporarily unavailable.' : 'Add your OpenRouter key in the dashboard to start.';
-			else if (!status) els.aiAccountStatus.textContent = 'Ready.';
-			if (!ready) {
-				const link = document.createElement('a');
-				link.href = '#';
-				link.dataset.url = acc.dashboard;
-				link.textContent = ' Open dashboard';
-				els.aiAccountStatus.append(link);
-			}
-		})
-		.catch((err) => {
-			if (err instanceof OpenRouterError && err.status === 401) {
-				updateAi({ token: '' });
-				renderAccount('Signed out — connect again.');
-			} else els.aiAccountStatus.textContent = `Couldn't reach snn.is: ${err instanceof Error ? err.message : String(err)}`;
-		});
-}
-
-async function connectAccount() {
-	if (pairing) {
-		pairing.abort();
-		return;
-	}
-	const controller = new AbortController();
-	pairing = controller;
-	renderAccount('Starting…');
-	try {
-		const p = await startPairing();
-		send({ type: 'OPEN_URL', url: p.url });
-		renderAccount(`Approve code ${p.code.slice(0, 4)}-${p.code.slice(4)} in your browser. Waiting…`);
-		const token = await waitForPairing(p, controller.signal);
-		pairing = null;
-		if (token) {
-			updateAi({ token });
-			renderAccount('Connected.');
-		} else renderAccount(controller.signal.aborted ? 'Cancelled.' : 'The code expired — try again.');
-	} catch (err) {
-		pairing = null;
-		renderAccount(`Couldn't start sign-in: ${err instanceof Error ? err.message : String(err)}`);
-	}
+	if (focusKey) els.aiKey.focus();
 }
 
 let runFrame = 0;
@@ -797,9 +737,9 @@ function renderAiRun() {
 /** Rebuilds missing sections (or `keys`, or everything when `all`). */
 async function startAi(keys?: string[], all = false) {
 	if (settings.format === 'email' || aiController) return;
-	if (!ai.token) {
+	if (!ai.apiKey.trim()) {
 		openAiPanel(true);
-		els.status.textContent = 'Connect your SNN account to use AI generation';
+		els.status.textContent = 'Add your OpenRouter API key to use AI generation';
 		return;
 	}
 	if (!ai.model.trim()) {
@@ -1108,12 +1048,26 @@ els.svg.addEventListener('change', () => update({ inlineSvg: els.svg.checked }))
 els.inline.addEventListener('change', () => update({ inlineImages: els.inline.checked }));
 els.wrap.addEventListener('change', () => viewer.setWrap(els.wrap.checked));
 
-els.aiConnect.addEventListener('click', () => void connectAccount());
-els.aiDisconnect.addEventListener('click', () => {
-	const token = ai.token;
-	updateAi({ token: '' });
-	renderAccount('Disconnected.');
-	void disconnect(token);
+els.aiKey.addEventListener('change', () => updateAi({ apiKey: els.aiKey.value.trim() }));
+els.aiKeyShow.addEventListener('click', () => {
+	const show = els.aiKey.type === 'password';
+	els.aiKey.type = show ? 'text' : 'password';
+	els.aiKeyShow.textContent = show ? 'Hide' : 'Show';
+});
+els.aiKeyCheck.addEventListener('click', async () => {
+	updateAi({ apiKey: els.aiKey.value.trim() });
+	if (!ai.apiKey) {
+		els.aiKeyStatus.textContent = 'Paste a key first.';
+		return;
+	}
+	els.aiKeyStatus.textContent = 'Checking…';
+	try {
+		const info = await checkKey(ai.apiKey);
+		const left = info.limitRemaining !== null ? ` · $${info.limitRemaining.toFixed(2)} left on this key` : '';
+		els.aiKeyStatus.textContent = `✓ Key works (${info.label})${left}`;
+	} catch (err) {
+		els.aiKeyStatus.textContent = `✗ ${err instanceof Error ? err.message : String(err)}`;
+	}
 });
 els.aiModel.addEventListener('change', () => updateAi({ model: els.aiModel.value.trim() || DEFAULT_AI_SETTINGS.model }));
 els.aiModel.addEventListener(

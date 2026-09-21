@@ -481,24 +481,14 @@ input {
 	align-items: start;
 }
 
-.ai-grid label,
-.ai-grid .field {
+.ai-grid label {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
 	min-width: 0;
 }
 
-.ai-grid .account {
-	flex: 1;
-	min-width: 0;
-	align-self: center;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.ai-grid .wide {
+.ai-grid label.wide {
 	grid-column: 1 / -1;
 }
 

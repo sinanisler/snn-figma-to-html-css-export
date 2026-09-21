@@ -1,10 +1,11 @@
 import type { ChatMessage } from '../core/ai';
 import type { ReasoningEffort } from '../shared/types';
 
-/** SNN account service: holds the user's provider key and forwards AI requests to OpenRouter. */
-export const SERVICE = 'https://snn.is/snn-figma';
-const API = `${SERVICE}/api.php`;
-const endpoint = (action: string) => `${API}?action=${action}`;
+const API = 'https://openrouter.ai/api/v1';
+const HEADERS = {
+	'HTTP-Referer': 'https://www.figma.com/community',
+	'X-Title': 'SNN Design to HTML/CSS',
+};
 
 export type StreamProgress = { content: number; reasoning: number };
 export type ChatResult = { content: string; cost: number | null; tokens: number | null; model: string | null };
@@ -13,8 +14,6 @@ export class OpenRouterError extends Error {
 	constructor(
 		message: string,
 		readonly status: number,
-		/** Service error code, e.g. not_connected, no_key, bad_key, quota. */
-		readonly code = '',
 	) {
 		super(message);
 	}
@@ -22,25 +21,21 @@ export class OpenRouterError extends Error {
 
 async function errorFrom(res: Response): Promise<OpenRouterError> {
 	let message = `${res.status} ${res.statusText}`;
-	let code = '';
 	try {
 		const body = await res.json();
 		if (body?.error?.message) message = body.error.message;
-		if (typeof body?.error?.code === 'string') code = body.error.code;
 	} catch {
 		// not JSON
 	}
-	if (res.status === 401) message = 'Not connected — open AI settings and click Connect account';
-	else if (res.status === 402 && !code) message = `Not enough OpenRouter credits (${message})`;
-	else if (res.status === 429 && !code) message = `Rate limited — try fewer sections at once (${message})`;
-	return new OpenRouterError(message, res.status, code);
+	if (res.status === 401) message = `Invalid API key (${message})`;
+	if (res.status === 402) message = `Not enough OpenRouter credits (${message})`;
+	if (res.status === 429) message = `Rate limited — try fewer sections at once (${message})`;
+	return new OpenRouterError(message, res.status);
 }
-
-const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
 /** One streamed chat completion. Resolves with the whole answer. */
 export async function streamChat(opts: {
-	token: string;
+	apiKey: string;
 	model: string;
 	messages: ChatMessage[];
 	reasoning: ReasoningEffort;
@@ -57,9 +52,9 @@ export async function streamChat(opts: {
 	if (opts.reasoning === 'off') body.reasoning = { enabled: false };
 	else if (opts.reasoning !== 'default') body.reasoning = { effort: opts.reasoning };
 
-	const res = await fetch(endpoint('chat'), {
+	const res = await fetch(`${API}/chat/completions`, {
 		method: 'POST',
-		headers: { ...auth(opts.token), 'Content-Type': 'application/json' },
+		headers: { ...HEADERS, Authorization: `Bearer ${opts.apiKey}`, 'Content-Type': 'application/json' },
 		body: JSON.stringify(body),
 		signal: opts.signal,
 	});
@@ -114,55 +109,13 @@ export async function streamChat(opts: {
 	return { content, cost, tokens, model };
 }
 
-export type Account = {
-	email: string;
-	plan: { name: string; daily_limit: number; monthly_limit: number; managed: boolean };
-	usage: { today: number; month: number };
-	providers: { id: string; name: string; ready: boolean }[];
-	dashboard: string;
-};
+export type KeyInfo = { label: string; limitRemaining: number | null; usage: number | null };
 
-export async function accountInfo(token: string): Promise<Account> {
-	const res = await fetch(endpoint('me'), { headers: auth(token) });
+export async function checkKey(apiKey: string): Promise<KeyInfo> {
+	const res = await fetch(`${API}/key`, { headers: { ...HEADERS, Authorization: `Bearer ${apiKey}` } });
 	if (!res.ok) throw await errorFrom(res);
-	return res.json();
-}
-
-export async function disconnect(token: string): Promise<void> {
-	await fetch(endpoint('disconnect'), { method: 'POST', headers: auth(token) }).catch(() => {});
-}
-
-export type Pairing = { code: string; secret: string; url: string; expires_in: number };
-
-/** Starts a sign-in: the user approves `url` in the browser while the plugin polls with `waitForPairing`. */
-export async function startPairing(): Promise<Pairing> {
-	const res = await fetch(endpoint('pair_start'), { method: 'POST' });
-	if (!res.ok) throw await errorFrom(res);
-	return res.json();
-}
-
-/** Resolves with the plugin token once the user approves, or null when the code expires or `signal` aborts. */
-export async function waitForPairing(p: Pairing, signal: AbortSignal, intervalMs = 2500): Promise<string | null> {
-	const deadline = Date.now() + p.expires_in * 1000;
-	while (!signal.aborted && Date.now() < deadline) {
-		await new Promise((r) => setTimeout(r, intervalMs));
-		if (signal.aborted) break;
-		try {
-			const res = await fetch(endpoint('pair_poll'), {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ code: p.code, secret: p.secret }),
-				signal,
-			});
-			if (!res.ok) continue;
-			const data = await res.json();
-			if (data.status === 'ok' && data.token) return data.token as string;
-			if (data.status === 'expired') return null;
-		} catch {
-			// network blip or abort — keep polling until the deadline
-		}
-	}
-	return null;
+	const { data } = await res.json();
+	return { label: data?.label ?? 'API key', limitRemaining: data?.limit_remaining ?? null, usage: data?.usage ?? null };
 }
 
 export type ModelInfo = { id: string; name: string; vision: boolean };
@@ -170,11 +123,15 @@ export type ModelInfo = { id: string; name: string; vision: boolean };
 let modelCache: Promise<ModelInfo[]> | null = null;
 
 export function listModels(): Promise<ModelInfo[]> {
-	modelCache ??= fetch(endpoint('models'))
+	modelCache ??= fetch(`${API}/models`, { headers: HEADERS })
 		.then(async (res) => {
 			if (!res.ok) throw await errorFrom(res);
 			const { data } = await res.json();
-			return data as ModelInfo[];
+			return (data as any[]).map((m) => ({
+				id: m.id as string,
+				name: (m.name as string) ?? m.id,
+				vision: Array.isArray(m.architecture?.input_modalities) && m.architecture.input_modalities.includes('image'),
+			}));
 		})
 		.catch((err) => {
 			modelCache = null;
