@@ -1,6 +1,6 @@
 import { buildDocument } from '../core/build';
 import { codegenSections, generate } from '../core/generate';
-import { DEFAULT_AI_SETTINGS, DEFAULT_SETTINGS, type AiSettings, type Format, type MainToUi, type Settings, type UiToMain } from '../shared/types';
+import { DEFAULT_SETTINGS, type Format, type MainToUi, type Settings, type UiToMain } from '../shared/types';
 import { readSelection } from './read';
 import { readTokens } from './tokens';
 
@@ -9,11 +9,6 @@ const MIN_W = 420, MAX_W = 1600, MIN_H = 360, MAX_H = 1200;
 async function loadSettings(): Promise<Settings> {
 	const saved = (await figma.clientStorage.getAsync('settings')) as Partial<Settings> | undefined;
 	return { ...DEFAULT_SETTINGS, ...saved };
-}
-
-async function loadAi(): Promise<AiSettings> {
-	const saved = (await figma.clientStorage.getAsync('ai')) as Partial<AiSettings> | undefined;
-	return { ...DEFAULT_AI_SETTINGS, ...saved };
 }
 
 /** Dev Mode: show code for the inspected layer in the Inspect panel. */
@@ -59,7 +54,9 @@ export default async function () {
 		post({ type: 'SELECTION', ids: sel.map((n) => n.id), names: sel.slice(0, 5).map((n) => n.name) });
 	};
 
-	post({ type: 'INIT', settings, ai: await loadAi(), size });
+	post({ type: 'INIT', settings, size });
+	// Drop the OpenRouter key and AI settings saved by versions that had the AI rebuild.
+	void figma.clientStorage.deleteAsync('ai');
 	sendSelection();
 	figma.on('selectionchange', sendSelection);
 	figma.on('currentpagechange', sendSelection);
@@ -111,24 +108,6 @@ export default async function () {
 			case 'SAVE_SETTINGS':
 				await figma.clientStorage.setAsync('settings', msg.settings);
 				return;
-			case 'SAVE_AI':
-				await figma.clientStorage.setAsync('ai', msg.ai);
-				return;
-			case 'SCREENSHOT': {
-				let bytes: Uint8Array | null = null;
-				try {
-					const node = await figma.getNodeByIdAsync(msg.nodeId);
-					if (node && 'exportAsync' in node) {
-						const scene = node as SceneNode;
-						const width = Math.min(msg.maxWidth, Math.max(1, Math.round(scene.width)));
-						bytes = await scene.exportAsync({ format: 'JPG', constraint: { type: 'WIDTH', value: width } });
-					}
-				} catch {
-					bytes = null;
-				}
-				post({ type: 'IMAGE', requestId: msg.requestId, bytes: bytes });
-				return;
-			}
 			case 'OPEN_URL':
 				if (/^https:\/\//.test(msg.url)) figma.openExternal(msg.url);
 				return;

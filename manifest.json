@@ -1,6 +1,6 @@
 {
 	"id": "1682098848751387838",
-	"name": "Figma to HTML,Tailwind,React and AI Responsive HTML",
+	"name": "Figma to HTML,Tailwind,React,Vue and Svelte",
 	"api": "1.0.0",
 	"main": "src/main/main.ts",
 	"ui": "src/ui/ui.ts",
@@ -19,11 +19,10 @@
 	"documentAccess": "dynamic-page",
 	"networkAccess": {
 		"allowedDomains": [
-			"https://openrouter.ai",
 			"https://fonts.googleapis.com",
 			"https://fonts.gstatic.com",
 			"https://cdn.jsdelivr.net"
 		],
-		"reasoning": "openrouter.ai is only contacted when the user adds their own OpenRouter API key and starts the optional AI rebuild. Google Fonts and the Tailwind browser build (cdn.jsdelivr.net) are loaded by the live preview so it matches the exported page."
+		"reasoning": "Google Fonts and the Tailwind browser build (cdn.jsdelivr.net) are loaded by the live preview so it matches the exported page."
 	}
 }

@@ -212,26 +212,6 @@ export const DEFAULT_SETTINGS: Settings = {
 	systemDarkMode: false,
 };
 
-export type ReasoningEffort = 'default' | 'off' | 'low' | 'medium' | 'high';
-
-export type AiSettings = {
-	apiKey: string;
-	model: string;
-	reasoning: ReasoningEffort;
-	/** Sections generated at the same time. */
-	parallel: 1 | 2 | 3 | 4;
-	/** Extra instructions appended to every section prompt. */
-	instructions: string;
-};
-
-export const DEFAULT_AI_SETTINGS: AiSettings = {
-	apiKey: '',
-	model: 'deepseek/deepseek-v4.1-flash',
-	reasoning: 'default',
-	parallel: 3,
-	instructions: '',
-};
-
 export type ReadOptions = {
 	rasterScale: number;
 	/** false skips image bytes (Dev Mode codegen only needs file names). */
@@ -271,12 +251,11 @@ export type TokensResult = {
 };
 
 export type MainToUi =
-	| { type: 'INIT'; settings: Settings; ai: AiSettings; size: { w: number; h: number } }
+	| { type: 'INIT'; settings: Settings; size: { w: number; h: number } }
 	| { type: 'SELECTION'; ids: string[]; names: string[] }
 	| { type: 'PROGRESS'; done: number; total: number }
 	| { type: 'RESULT'; result: ReadResult }
 	| { type: 'TOKENS'; tokens: TokensResult }
-	| { type: 'IMAGE'; requestId: number; bytes: Uint8Array | null }
 	| { type: 'ERROR'; message: string };
 
 export type UiToMain =
@@ -285,7 +264,5 @@ export type UiToMain =
 	| { type: 'FOCUS'; nodeId: string }
 	| { type: 'RESIZE'; w: number; h: number }
 	| { type: 'SAVE_SETTINGS'; settings: Settings }
-	| { type: 'SAVE_AI'; ai: AiSettings }
-	| { type: 'SCREENSHOT'; requestId: number; nodeId: string; maxWidth: number }
 	| { type: 'OPEN_URL'; url: string }
 	| { type: 'NOTIFY'; message: string };

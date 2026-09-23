@@ -44,8 +44,6 @@ const MESSAGES: Record<string, string> = {
 	CHECK_IMAGE_ALT: 'Image has a default layer name, so its alt text is empty. Name the layer to describe the image.',
 	CHECK_HEADING_SKIP: 'Heading level skipped — screen readers expect h1 → h2 → h3.',
 	CHECK_MULTIPLE_H1: 'More than one h1 on the page.',
-	AI_SECTION_FAILED: 'AI generation failed for this section — the standard output is used instead.',
-	AI_TEXT_CHANGED: 'AI output may have changed or dropped text in this section — compare with the design.',
 };
 
 export function describeWarning(code: string): string {
